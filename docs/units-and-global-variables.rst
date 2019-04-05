@@ -189,7 +189,7 @@ Mathematical and Cryptographic Functions
 .. warning::
 
     If you use ``ecrecover``, be aware that a valid signature can be turned into a different valid signature without requiring
-    knowledge of the corresponding private key. Since `EIP-2 <http://eips.ethereum.org/EIPS/eip-2#specification>`_, all transaction signatures with an ``s`` value
+    knowledge of the corresponding private key. For transactions, `EIP-2 <http://eips.ethereum.org/EIPS/eip-2#specification>`_ fixed this problem by requiring the ``s`` value to be greater than ``secp256k1n/2``, but this requirement is not enforced by the ``ecrecover`` precompile to stay compatible with other uses.
     greater than ``secp256k1n/2`` are considered invalid.
 
     This is usually not a problem unless you require signatures to be unique or
