@@ -31,10 +31,11 @@
 #include <boost/program_options.hpp>
 
 #include <cstdlib>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 #include <queue>
 #include <regex>
+#include <utility>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -71,7 +72,7 @@ struct TestStats
 class TestFilter
 {
 public:
-	explicit TestFilter(string const& _filter): m_filter(_filter)
+	explicit TestFilter(string _filter): m_filter(std::move(_filter))
 	{
 		string filter{m_filter};
 
@@ -97,14 +98,14 @@ public:
 	TestTool(
 		TestCreator _testCaseCreator,
 		TestOptions const& _options,
-		fs::path const& _path,
-		string const& _name
+		fs::path _path,
+		string _name
 	):
 		m_testCaseCreator(_testCaseCreator),
 		m_options(_options),
 		m_filter(TestFilter{_options.testFilter}),
-		m_path(_path),
-		m_name(_name)
+		m_path(std::move(_path)),
+		m_name(std::move(_name))
 	{}
 
 	enum class Result
@@ -160,8 +161,12 @@ TestTool::Result TestTool::process()
 		{
 			(AnsiColorized(cout, formatted, {BOLD}) << m_name << ": ").flush();
 
-			m_test = m_testCaseCreator(TestCase::Config{m_path.string(), m_options.evmVersion()});
-			if (m_test->validateSettings(m_options.evmVersion()))
+			m_test = m_testCaseCreator(TestCase::Config{
+				m_path.string(),
+				m_options.evmVersion(),
+				m_options.enforceViaYul
+			});
+			if (m_test->shouldRun())
 				switch (TestCase::TestResult result = m_test->run(outputMessages, "  ", formatted))
 				{
 					case TestCase::TestResult::Success:
@@ -172,7 +177,7 @@ TestTool::Result TestTool::process()
 
 						AnsiColorized(cout, formatted, {BOLD, CYAN}) << "  Contract:" << endl;
 						m_test->printSource(cout, "    ", formatted);
-						m_test->printUpdatedSettings(cout, "    ", formatted);
+						m_test->printSettings(cout, "    ", formatted);
 
 						cout << endl << outputMessages.str() << endl;
 						return result == TestCase::TestResult::FatalError ? Result::Exception : Result::Failure;

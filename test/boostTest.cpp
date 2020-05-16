@@ -64,12 +64,13 @@ int registerTests(
 	boost::unit_test::test_suite& _suite,
 	boost::filesystem::path const& _basepath,
 	boost::filesystem::path const& _path,
+	bool _enforceViaYul,
 	TestCase::TestCaseCreator _testCaseCreator
 )
 {
 	int numTestsAdded = 0;
 	fs::path fullpath = _basepath / _path;
-	TestCase::Config config{fullpath.string(), solidity::test::CommonOptions::get().evmVersion()};
+	TestCase::Config config{fullpath.string(), solidity::test::CommonOptions::get().evmVersion(), _enforceViaYul};
 	if (fs::is_directory(fullpath))
 	{
 		test_suite* sub_suite = BOOST_TEST_SUITE(_path.filename().string());
@@ -78,7 +79,12 @@ int registerTests(
 			fs::directory_iterator()
 		))
 			if (fs::is_directory(entry.path()) || TestCase::isTestFilename(entry.path().filename()))
-				numTestsAdded += registerTests(*sub_suite, _basepath, _path / entry.path().filename(), _testCaseCreator);
+				numTestsAdded += registerTests(
+					*sub_suite,
+					_basepath, _path / entry.path().filename(),
+					_enforceViaYul,
+					_testCaseCreator
+				);
 		_suite.add(sub_suite);
 	}
 	else
@@ -94,7 +100,7 @@ int registerTests(
 					{
 						stringstream errorStream;
 						auto testCase = _testCaseCreator(config);
-						if (testCase->validateSettings(solidity::test::CommonOptions::get().evmVersion()))
+						if (testCase->shouldRun())
 							switch (testCase->run(errorStream))
 							{
 								case TestCase::TestResult::Success:
@@ -164,6 +170,7 @@ test_suite* init_unit_test_suite( int /*argc*/, char* /*argv*/[] )
 			master,
 			options.testPath / ts.path,
 			ts.subpath,
+			options.enforceViaYul,
 			ts.testCaseCreator
 		) > 0, std::string("no ") + ts.title + " tests found");
 	}
@@ -187,7 +194,7 @@ test_suite* init_unit_test_suite( int /*argc*/, char* /*argv*/[] )
 	if (solidity::test::CommonOptions::get().disableSMT)
 		removeTestSuite("SMTChecker");
 
-	return 0;
+	return nullptr;
 }
 
 // BOOST_TEST_DYN_LINK should be defined if user want to link against shared boost test library

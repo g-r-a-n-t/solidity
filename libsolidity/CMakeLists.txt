@@ -12,8 +12,12 @@ set(sources
 	analysis/ControlFlowGraph.h
 	analysis/DeclarationContainer.cpp
 	analysis/DeclarationContainer.h
+	analysis/DeclarationTypeChecker.cpp
+	analysis/DeclarationTypeChecker.h
 	analysis/DocStringAnalyser.cpp
 	analysis/DocStringAnalyser.h
+	analysis/ImmutableValidator.cpp
+	analysis/ImmutableValidator.h
 	analysis/GlobalContext.cpp
 	analysis/GlobalContext.h
 	analysis/NameAndTypeResolver.cpp
@@ -71,8 +75,12 @@ set(sources
 	codegen/LValue.h
 	codegen/MultiUseYulFunctionCollector.h
 	codegen/MultiUseYulFunctionCollector.cpp
+	codegen/ReturnInfo.h
+	codegen/ReturnInfo.cpp
 	codegen/YulUtilFunctions.h
 	codegen/YulUtilFunctions.cpp
+	codegen/ir/Common.cpp
+	codegen/ir/Common.h
 	codegen/ir/IRGenerator.cpp
 	codegen/ir/IRGenerator.h
 	codegen/ir/IRGeneratorForStatements.cpp
@@ -100,8 +108,12 @@ set(sources
 	formal/SMTPortfolio.cpp
 	formal/SMTPortfolio.h
 	formal/SolverInterface.h
+	formal/Sorts.cpp
+	formal/Sorts.h
 	formal/SSAVariable.cpp
 	formal/SSAVariable.h
+	formal/SymbolicState.cpp
+	formal/SymbolicState.h
 	formal/SymbolicTypes.cpp
 	formal/SymbolicTypes.h
 	formal/SymbolicVariables.cpp
@@ -156,7 +168,7 @@ if (NOT (${Z3_FOUND} OR ${CVC4_FOUND}))
 endif()
 
 add_library(solidity ${sources} ${z3_SRCS} ${cvc4_SRCS})
-target_link_libraries(solidity PUBLIC yul evmasm langutil solutil Boost::boost Boost::filesystem Boost::system)
+target_link_libraries(solidity PUBLIC yul evmasm langutil solutil Boost::boost)
 
 if (${Z3_FOUND})
   target_link_libraries(solidity PUBLIC z3::libz3)

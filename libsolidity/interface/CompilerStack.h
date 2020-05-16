@@ -37,6 +37,7 @@
 
 #include <libsolutil/Common.h>
 #include <libsolutil/FixedHash.h>
+#include <libsolutil/LazyInit.h>
 
 #include <boost/noncopyable.hpp>
 #include <json/json.h>
@@ -108,7 +109,7 @@ public:
 	/// Creates a new compiler stack.
 	/// @param _readFile callback used to read files for import statements. Must return
 	/// and must not emit exceptions.
-	explicit CompilerStack(ReadCallback::Callback const& _readFile = ReadCallback::Callback());
+	explicit CompilerStack(ReadCallback::Callback _readFile = ReadCallback::Callback());
 
 	~CompilerStack();
 
@@ -342,11 +343,11 @@ private:
 		std::string yulIROptimized; ///< Optimized experimental Yul IR code.
 		std::string ewasm; ///< Experimental Ewasm text representation
 		evmasm::LinkerObject ewasmObject; ///< Experimental Ewasm code
-		mutable std::unique_ptr<std::string const> metadata; ///< The metadata json that will be hashed into the chain.
-		mutable std::unique_ptr<Json::Value const> abi;
-		mutable std::unique_ptr<Json::Value const> storageLayout;
-		mutable std::unique_ptr<Json::Value const> userDocumentation;
-		mutable std::unique_ptr<Json::Value const> devDocumentation;
+		util::LazyInit<std::string const> metadata; ///< The metadata json that will be hashed into the chain.
+		util::LazyInit<Json::Value const> abi;
+		util::LazyInit<Json::Value const> storageLayout;
+		util::LazyInit<Json::Value const> userDocumentation;
+		util::LazyInit<Json::Value const> devDocumentation;
 		mutable std::unique_ptr<std::string const> sourceMapping;
 		mutable std::unique_ptr<std::string const> runtimeSourceMapping;
 	};
@@ -447,8 +448,6 @@ private:
 	std::map<util::h256, std::string> m_smtlib2Responses;
 	std::shared_ptr<GlobalContext> m_globalContext;
 	std::vector<Source const*> m_sourceOrder;
-	/// This is updated during compilation.
-	std::map<ASTNode const*, std::shared_ptr<DeclarationContainer>> m_scopes;
 	std::map<std::string const, Contract> m_contracts;
 	langutil::ErrorList m_errorList;
 	langutil::ErrorReporter m_errorReporter;

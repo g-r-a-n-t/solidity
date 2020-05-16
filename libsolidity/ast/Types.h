@@ -29,6 +29,7 @@
 
 #include <libsolutil/Common.h>
 #include <libsolutil/CommonIO.h>
+#include <libsolutil/LazyInit.h>
 #include <libsolutil/Result.h>
 
 #include <boost/rational.hpp>
@@ -38,6 +39,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace solidity::frontend
 {
@@ -92,8 +94,8 @@ class MemberList
 public:
 	struct Member
 	{
-		Member(std::string const& _name, Type const* _type, Declaration const* _declaration = nullptr):
-			name(_name),
+		Member(std::string _name, Type const* _type, Declaration const* _declaration = nullptr):
+			name(std::move(_name)),
 			type(_type),
 			declaration(_declaration)
 		{
@@ -106,7 +108,7 @@ public:
 
 	using MemberMap = std::vector<Member>;
 
-	explicit MemberList(MemberMap const& _members): m_memberTypes(_members) {}
+	explicit MemberList(MemberMap _members): m_memberTypes(std::move(_members)) {}
 
 	void combine(MemberList const& _other);
 	TypePointer memberType(std::string const& _name) const
@@ -138,8 +140,10 @@ public:
 	MemberMap::const_iterator end() const { return m_memberTypes.end(); }
 
 private:
+	StorageOffsets const& storageOffsets() const;
+
 	MemberMap m_memberTypes;
-	mutable std::unique_ptr<StorageOffsets> m_storageOffsets;
+	util::LazyInit<StorageOffsets> m_storageOffsets;
 };
 
 static_assert(std::is_nothrow_move_constructible<MemberList>::value, "MemberList should be noexcept move constructible");
@@ -451,6 +455,9 @@ public:
 	unsigned numBits() const { return m_bits; }
 	bool isSigned() const { return m_modifier == Modifier::Signed; }
 
+	u256 min() const;
+	u256 max() const;
+
 	bigint minValue() const;
 	bigint maxValue() const;
 
@@ -520,8 +527,8 @@ private:
 class RationalNumberType: public Type
 {
 public:
-	explicit RationalNumberType(rational const& _value, Type const* _compatibleBytesType = nullptr):
-		m_value(_value), m_compatibleBytesType(_compatibleBytesType)
+	explicit RationalNumberType(rational _value, Type const* _compatibleBytesType = nullptr):
+		m_value(std::move(_value)), m_compatibleBytesType(_compatibleBytesType)
 	{}
 
 	Category category() const override { return Category::RationalNumber; }
@@ -543,7 +550,7 @@ public:
 
 	/// @returns the smallest integer type that can hold the value or an empty pointer if not possible.
 	IntegerType const* integerType() const;
-	/// @returns the smallest fixed type that can  hold the value or incurs the least precision loss,
+	/// @returns the smallest fixed type that can hold the value or incurs the least precision loss,
 	/// unless the value was truncated, then a suitable type will be chosen to indicate such event.
 	/// If the integer part does not fit, returns an empty pointer.
 	FixedPointType const* fixedPointType() const;
@@ -582,7 +589,7 @@ class StringLiteralType: public Type
 {
 public:
 	explicit StringLiteralType(Literal const& _literal);
-	explicit StringLiteralType(std::string const& _value);
+	explicit StringLiteralType(std::string _value);
 
 	Category category() const override { return Category::StringLiteral; }
 
@@ -701,7 +708,12 @@ public:
 	/// pointer type, state variables are bound references. Assignments to pointers or deleting
 	/// them will not modify storage (that will only change the pointer). Assignment from
 	/// non-storage objects to a variable of storage pointer type is not possible.
-	bool isPointer() const { return m_isPointer; }
+	/// For anything other than storage, this always returns true because assignments
+	/// never change the contents of the original value.
+	bool isPointer() const;
+
+	/// @returns true if this is valid to be stored in data location _loc
+	virtual BoolResult validForLocation(DataLocation _loc) const = 0;
 
 	bool operator==(ReferenceType const& _other) const
 	{
@@ -742,11 +754,11 @@ public:
 	}
 
 	/// Constructor for a fixed-size array type ("type[20]")
-	ArrayType(DataLocation _location, Type const* _baseType, u256 const& _length):
+	ArrayType(DataLocation _location, Type const* _baseType, u256 _length):
 		ReferenceType(_location),
 		m_baseType(copyForLocationIfReference(_baseType)),
 		m_hasDynamicLength(false),
-		m_length(_length)
+		m_length(std::move(_length))
 	{}
 
 	Category category() const override { return Category::Array; }
@@ -769,8 +781,7 @@ public:
 	TypePointer decodingType() const override;
 	TypeResult interfaceType(bool _inLibrary) const override;
 
-	/// @returns true if this is valid to be stored in calldata
-	bool validForCalldata() const;
+	BoolResult validForLocation(DataLocation _loc) const override;
 
 	/// @returns true if this is a byte array or a string
 	bool isByteArray() const { return m_arrayKind != ArrayKind::Ordinary; }
@@ -823,9 +834,9 @@ public:
 	bool isDynamicallyEncoded() const override { return true; }
 	bool canLiveOutsideStorage() const override { return m_arrayType.canLiveOutsideStorage(); }
 	std::string toString(bool _short) const override;
+	TypePointer mobileType() const override;
 
-	/// @returns true if this is valid to be stored in calldata
-	bool validForCalldata() const { return m_arrayType.validForCalldata(); }
+	BoolResult validForLocation(DataLocation _loc) const override { return m_arrayType.validForLocation(_loc); }
 
 	ArrayType const& arrayType() const { return m_arrayType; }
 	u256 memoryDataSize() const override { solAssert(false, ""); }
@@ -893,6 +904,8 @@ public:
 	/// @returns a list of all state variables (including inherited) of the contract and their
 	/// offsets in storage.
 	std::vector<std::tuple<VariableDeclaration const*, u256, unsigned>> stateVariables() const;
+	/// @returns a list of all immutable variables (including inherited) of the contract.
+	std::vector<VariableDeclaration const*> immutableVariables() const;
 protected:
 	std::vector<std::tuple<std::string, TypePointer>> makeStackItems() const override;
 private:
@@ -929,15 +942,9 @@ public:
 	Type const* encodingType() const override;
 	TypeResult interfaceType(bool _inLibrary) const override;
 
-	bool recursive() const
-	{
-		if (m_recursive.has_value())
-			return m_recursive.value();
+	BoolResult validForLocation(DataLocation _loc) const override;
 
-		interfaceType(false);
-
-		return m_recursive.value();
-	}
+	bool recursive() const;
 
 	std::unique_ptr<ReferenceType> copyForLocation(DataLocation _location, bool _isPointer) const override;
 
@@ -966,7 +973,6 @@ private:
 	// Caches for interfaceType(bool)
 	mutable std::optional<TypeResult> m_interfaceType;
 	mutable std::optional<TypeResult> m_interfaceType_library;
-	mutable std::optional<bool> m_recursive;
 };
 
 /**
@@ -1127,8 +1133,8 @@ public:
 
 	/// Detailed constructor, use with care.
 	FunctionType(
-		TypePointers const& _parameterTypes,
-		TypePointers const& _returnParameterTypes,
+		TypePointers _parameterTypes,
+		TypePointers _returnParameterTypes,
 		strings _parameterNames = strings(),
 		strings _returnParameterNames = strings(),
 		Kind _kind = Kind::Internal,
@@ -1140,10 +1146,10 @@ public:
 		bool _saltSet = false,
 		bool _bound = false
 	):
-		m_parameterTypes(_parameterTypes),
-		m_returnParameterTypes(_returnParameterTypes),
-		m_parameterNames(_parameterNames),
-		m_returnParameterNames(_returnParameterNames),
+		m_parameterTypes(std::move(_parameterTypes)),
+		m_returnParameterTypes(std::move(_returnParameterTypes)),
+		m_parameterNames(std::move(_parameterNames)),
+		m_returnParameterNames(std::move(_returnParameterNames)),
 		m_kind(_kind),
 		m_stateMutability(_stateMutability),
 		m_arbitraryParameters(_arbitraryParameters),
@@ -1391,7 +1397,6 @@ public:
 	std::string richIdentifier() const override;
 	bool operator==(Type const& _other) const override;
 	std::string toString(bool _short) const override;
-
 protected:
 	std::vector<std::tuple<std::string, TypePointer>> makeStackItems() const override { return {}; }
 private:

@@ -24,6 +24,8 @@
 #include <libsolidity/codegen/ir/IRLValue.h>
 #include <libsolidity/codegen/ir/IRVariable.h>
 
+#include <functional>
+
 namespace solidity::frontend
 {
 
@@ -46,6 +48,15 @@ public:
 
 	/// Generates code to initialize the given state variable.
 	void initializeStateVar(VariableDeclaration const& _varDecl);
+	/// Generates code to initialize the given local variable.
+	void initializeLocalVar(VariableDeclaration const& _varDecl);
+
+	/// Calculates expression's value and returns variable where it was stored
+	IRVariable evaluateExpression(Expression const& _expression, Type const& _to);
+
+	/// @returns the name of a function that computes the value of the given constant
+	/// and also generates the function.
+	std::string constantValueFunction(VariableDeclaration const& _constant);
 
 	void endVisit(VariableDeclarationStatement const& _variableDeclaration) override;
 	bool visit(Conditional const& _conditional) override;
@@ -60,6 +71,7 @@ public:
 	void endVisit(UnaryOperation const& _unaryOperation) override;
 	bool visit(BinaryOperation const& _binOp) override;
 	void endVisit(FunctionCall const& _funCall) override;
+	void endVisit(FunctionCallOptions const& _funCallOptions) override;
 	void endVisit(MemberAccess const& _memberAccess) override;
 	bool visit(InlineAssembly const& _inlineAsm) override;
 	void endVisit(IndexAccess const& _indexAccess) override;
@@ -67,10 +79,36 @@ public:
 	void endVisit(Identifier const& _identifier) override;
 	bool visit(Literal const& _literal) override;
 
+	bool visit(TryStatement const& _tryStatement) override;
+	bool visit(TryCatchClause const& _tryCatchClause) override;
+
 private:
+	/// Handles all catch cases of a try statement, except the success-case.
+	void handleCatch(TryStatement const& _tryStatement);
+	void handleCatchStructuredAndFallback(
+		TryCatchClause const& _structured,
+		TryCatchClause const* _fallback
+	);
+	void handleCatchFallback(TryCatchClause const& _fallback);
+
+	/// Generates code to rethrow an exception.
+	void rethrow();
+
+	void handleVariableReference(
+		VariableDeclaration const& _variable,
+		Expression const& _referencingExpression
+	);
+
 	/// Appends code to call an external function with the given arguments.
 	/// All involved expressions have already been visited.
 	void appendExternalFunctionCall(
+		FunctionCall const& _functionCall,
+		std::vector<ASTPointer<Expression const>> const& _arguments
+	);
+
+	/// Appends code for .call / .delegatecall / .staticcall.
+	/// All involved expressions have already been visited.
+	void appendBareCall(
 		FunctionCall const& _functionCall,
 		std::vector<ASTPointer<Expression const>> const& _arguments
 	);
@@ -85,7 +123,8 @@ private:
 
 	/// @returns a Yul expression representing the current value of @a _expression,
 	/// converted to type @a _to if it does not yet have that type.
-	std::string expressionAsType(Expression const& _expression, Type const& _to);
+	/// If @a _forceCleanup is set to true, it also cleans the value, in case it already has type @a _to.
+	std::string expressionAsType(Expression const& _expression, Type const& _to, bool _forceCleanup = false);
 
 	/// @returns an output stream that can be used to define @a _var using a function call or
 	/// single stack slot expression.
@@ -99,6 +138,11 @@ private:
 
 	void declareAssign(IRVariable const& _var, IRVariable const& _value, bool _define);
 
+	/// @returns an IRVariable with the zero
+	/// value of @a _type.
+	/// @param _splitFunctionTypes if false, returns two zeroes
+	IRVariable zeroValue(Type const& _type, bool _splitFunctionTypes = true);
+
 	void appendAndOrOperatorCode(BinaryOperation const& _binOp);
 	void appendSimpleUnaryOperation(UnaryOperation const& _operation, Expression const& _expr);
 
@@ -110,12 +154,17 @@ private:
 		std::string const& _right
 	);
 
+	/// @returns code to perform the given shift operation.
+	/// The operation itself will be performed in the type of the value,
+	/// while the amount to shift can have its own type.
+	std::string shiftOperation(langutil::Token _op, IRVariable const& _value, IRVariable const& _shiftAmount);
+
 	/// Assigns the value of @a _value to the lvalue @a _lvalue.
 	void writeToLValue(IRLValue const& _lvalue, IRVariable const& _value);
 	/// @returns a fresh IR variable containing the value of the lvalue @a _lvalue.
 	IRVariable readFromLValue(IRLValue const& _lvalue);
 
-	/// Stores the given @a _lvalue in m_currentLValue, if it will be written to (lValueRequested). Otherwise
+	/// Stores the given @a _lvalue in m_currentLValue, if it will be written to (willBeWrittenTo). Otherwise
 	/// defines the expression @a _expression by reading the value from @a _lvalue.
 	void setLValue(Expression const& _expression, IRLValue _lvalue);
 	void generateLoop(

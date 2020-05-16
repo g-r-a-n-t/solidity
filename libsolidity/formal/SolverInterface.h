@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <libsolidity/formal/Sorts.h>
+
 #include <libsolidity/ast/Types.h>
 #include <libsolidity/interface/ReadFile.h>
 #include <liblangutil/Exceptions.h>
@@ -26,6 +28,7 @@
 #include <boost/noncopyable.hpp>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -52,94 +55,6 @@ enum class CheckResult
 	SATISFIABLE, UNSATISFIABLE, UNKNOWN, CONFLICTING, ERROR
 };
 
-enum class Kind
-{
-	Int,
-	Bool,
-	Function,
-	Array,
-	Sort
-};
-
-struct Sort
-{
-	Sort(Kind _kind):
-		kind(_kind) {}
-	virtual ~Sort() = default;
-	virtual bool operator==(Sort const& _other) const { return kind == _other.kind; }
-
-	Kind const kind;
-};
-using SortPointer = std::shared_ptr<Sort>;
-
-struct FunctionSort: public Sort
-{
-	FunctionSort(std::vector<SortPointer> _domain, SortPointer _codomain):
-		Sort(Kind::Function), domain(std::move(_domain)), codomain(std::move(_codomain)) {}
-	bool operator==(Sort const& _other) const override
-	{
-		if (!Sort::operator==(_other))
-			return false;
-		auto _otherFunction = dynamic_cast<FunctionSort const*>(&_other);
-		solAssert(_otherFunction, "");
-		if (domain.size() != _otherFunction->domain.size())
-			return false;
-		if (!std::equal(
-			domain.begin(),
-			domain.end(),
-			_otherFunction->domain.begin(),
-			[&](SortPointer _a, SortPointer _b) { return *_a == *_b; }
-		))
-			return false;
-		solAssert(codomain, "");
-		solAssert(_otherFunction->codomain, "");
-		return *codomain == *_otherFunction->codomain;
-	}
-
-	std::vector<SortPointer> domain;
-	SortPointer codomain;
-};
-
-struct ArraySort: public Sort
-{
-	/// _domain is the sort of the indices
-	/// _range is the sort of the values
-	ArraySort(SortPointer _domain, SortPointer _range):
-		Sort(Kind::Array), domain(std::move(_domain)), range(std::move(_range)) {}
-	bool operator==(Sort const& _other) const override
-	{
-		if (!Sort::operator==(_other))
-			return false;
-		auto _otherArray = dynamic_cast<ArraySort const*>(&_other);
-		solAssert(_otherArray, "");
-		solAssert(_otherArray->domain, "");
-		solAssert(_otherArray->range, "");
-		solAssert(domain, "");
-		solAssert(range, "");
-		return *domain == *_otherArray->domain && *range == *_otherArray->range;
-	}
-
-	SortPointer domain;
-	SortPointer range;
-};
-
-struct SortSort: public Sort
-{
-	SortSort(SortPointer _inner): Sort(Kind::Sort), inner(std::move(_inner)) {}
-	bool operator==(Sort const& _other) const override
-	{
-		if (!Sort::operator==(_other))
-			return false;
-		auto _otherSort = dynamic_cast<SortSort const*>(&_other);
-		solAssert(_otherSort, "");
-		solAssert(_otherSort->inner, "");
-		solAssert(inner, "");
-		return *inner == *_otherSort->inner;
-	}
-
-	SortPointer inner;
-};
-
 // Forward declaration.
 SortPointer smtSort(Type const& _type);
 
@@ -149,7 +64,8 @@ class Expression
 	friend class SolverInterface;
 public:
 	explicit Expression(bool _v): Expression(_v ? "true" : "false", Kind::Bool) {}
-	explicit Expression(frontend::TypePointer _type): Expression(_type->toString(), {}, std::make_shared<SortSort>(smtSort(*_type))) {}
+	explicit Expression(frontend::TypePointer _type): Expression(_type->toString(true), {}, std::make_shared<SortSort>(smtSort(*_type))) {}
+	explicit Expression(std::shared_ptr<SortSort> _sort): Expression("", {}, _sort) {}
 	Expression(size_t _number): Expression(std::to_string(_number), Kind::Int) {}
 	Expression(u256 const& _number): Expression(_number.str(), Kind::Int) {}
 	Expression(s256 const& _number): Expression(_number.str(), Kind::Int) {}
@@ -162,6 +78,13 @@ public:
 
 	bool hasCorrectArity() const
 	{
+		if (name == "tuple_constructor")
+		{
+			auto tupleSort = std::dynamic_pointer_cast<TupleSort>(sort);
+			solAssert(tupleSort, "");
+			return arguments.size() == tupleSort->components.size();
+		}
+
 		static std::map<std::string, unsigned> const operatorsArity{
 			{"ite", 3},
 			{"not", 1},
@@ -180,7 +103,8 @@ public:
 			{"mod", 2},
 			{"select", 2},
 			{"store", 3},
-			{"const_array", 2}
+			{"const_array", 2},
+			{"tuple_get", 2}
 		};
 		return operatorsArity.count(name) && operatorsArity.at(name) == arguments.size();
 	}
@@ -223,8 +147,7 @@ public:
 	/// The function is pure and returns the modified array.
 	static Expression store(Expression _array, Expression _index, Expression _element)
 	{
-		solAssert(_array.sort->kind == Kind::Array, "");
-		std::shared_ptr<ArraySort> arraySort = std::dynamic_pointer_cast<ArraySort>(_array.sort);
+		auto arraySort = std::dynamic_pointer_cast<ArraySort>(_array.sort);
 		solAssert(arraySort, "");
 		solAssert(_index.sort, "");
 		solAssert(_element.sort, "");
@@ -249,6 +172,33 @@ public:
 			"const_array",
 			std::vector<Expression>{std::move(_sort), std::move(_value)},
 			arraySort
+		);
+	}
+
+	static Expression tuple_get(Expression _tuple, size_t _index)
+	{
+		solAssert(_tuple.sort->kind == Kind::Tuple, "");
+		std::shared_ptr<TupleSort> tupleSort = std::dynamic_pointer_cast<TupleSort>(_tuple.sort);
+		solAssert(tupleSort, "");
+		solAssert(_index < tupleSort->components.size(), "");
+		return Expression(
+			"tuple_get",
+			std::vector<Expression>{std::move(_tuple), Expression(_index)},
+			tupleSort->components.at(_index)
+		);
+	}
+
+	static Expression tuple_constructor(Expression _tuple, std::vector<Expression> _arguments)
+	{
+		solAssert(_tuple.sort->kind == Kind::Sort, "");
+		auto sortSort = std::dynamic_pointer_cast<SortSort>(_tuple.sort);
+		auto tupleSort = std::dynamic_pointer_cast<TupleSort>(sortSort->inner);
+		solAssert(tupleSort, "");
+		solAssert(_arguments.size() == tupleSort->components.size(), "");
+		return Expression(
+			"tuple_constructor",
+			std::move(_arguments),
+			tupleSort
 		);
 	}
 

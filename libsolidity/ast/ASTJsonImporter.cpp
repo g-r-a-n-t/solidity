@@ -218,10 +218,15 @@ ASTPointer<ASTNode> ASTJsonImporter::convertJsonToASTNode(Json::Value const& _js
 
 ASTPointer<SourceUnit> ASTJsonImporter::createSourceUnit(Json::Value const& _node, string const& _srcName)
 {
+	optional<string> license;
+	if (_node.isMember("license") && !_node["license"].isNull())
+		license = _node["license"].asString();
+
 	vector<ASTPointer<ASTNode>> nodes;
 	for (auto& child: member(_node, "nodes"))
 		nodes.emplace_back(convertJsonToASTNode(child));
-	ASTPointer<SourceUnit> tmp = createASTNode<SourceUnit>(_node, nodes);
+
+	ASTPointer<SourceUnit> tmp = createASTNode<SourceUnit>(_node, license, nodes);
 	tmp->annotation().path = _srcName;
 	return tmp;
 }
@@ -411,6 +416,25 @@ ASTPointer<VariableDeclaration> ASTJsonImporter::createVariableDeclaration(Json:
 {
 	astAssert(_node["name"].isString(), "Expected 'name' to be a string!");
 
+	VariableDeclaration::Mutability mutability{};
+	astAssert(member(_node, "mutability").isString(), "'mutability' expected to be string.");
+	string const mutabilityStr = member(_node, "mutability").asString();
+	if (mutabilityStr == "constant")
+	{
+		mutability = VariableDeclaration::Mutability::Constant;
+		astAssert(memberAsBool(_node, "constant"), "");
+	}
+	else
+	{
+		astAssert(!memberAsBool(_node, "constant"), "");
+		if (mutabilityStr == "mutable")
+			mutability = VariableDeclaration::Mutability::Mutable;
+		else if (mutabilityStr == "immutable")
+			mutability = VariableDeclaration::Mutability::Immutable;
+		else
+			astAssert(false, "");
+	}
+
 	return createASTNode<VariableDeclaration>(
 		_node,
 		nullOrCast<TypeName>(member(_node, "typeName")),
@@ -419,7 +443,7 @@ ASTPointer<VariableDeclaration> ASTJsonImporter::createVariableDeclaration(Json:
 		visibility(_node),
 		memberAsBool(_node, "stateVariable"),
 		_node.isMember("indexed") ? memberAsBool(_node, "indexed") : false,
-		memberAsBool(_node, "constant"),
+		mutability,
 		_node["overrides"].isNull() ? nullptr : createOverrideSpecifier(member(_node, "overrides")),
 		location(_node)
 	);
@@ -434,7 +458,7 @@ ASTPointer<ModifierDefinition> ASTJsonImporter::createModifierDefinition(Json::V
 		createParameterList(member(_node, "parameters")),
 		memberAsBool(_node, "virtual"),
 		_node["overrides"].isNull() ? nullptr : createOverrideSpecifier(member(_node, "overrides")),
-		createBlock(member(_node, "body"))
+		_node["body"].isNull() ? nullptr: createBlock(member(_node, "body"))
 	);
 }
 
@@ -489,7 +513,7 @@ ASTPointer<UserDefinedTypeName> ASTJsonImporter::createUserDefinedTypeName(Json:
 	string nameString = member(_node, "name").asString();
 	boost::algorithm::split(strs, nameString, boost::is_any_of("."));
 	for (string s: strs)
-		namePath.push_back(ASTString(s));
+		namePath.emplace_back(s);
 	return createASTNode<UserDefinedTypeName>(
 		_node,
 		namePath

@@ -49,16 +49,18 @@ ExecutionFramework::ExecutionFramework(langutil::EVMVersion _evmVersion):
 	m_showMessages(solidity::test::CommonOptions::get().showMessages),
 	m_evmHost(make_shared<EVMHost>(m_evmVersion))
 {
-	if (solidity::test::CommonOptions::get().optimizeYul)
-		m_optimiserSettings = solidity::frontend::OptimiserSettings::full();
-	else if (solidity::test::CommonOptions::get().optimize)
+	if (solidity::test::CommonOptions::get().optimize)
 		m_optimiserSettings = solidity::frontend::OptimiserSettings::standard();
-	m_evmHost->reset();
 
+	reset();
+}
+
+void ExecutionFramework::reset()
+{
+	m_evmHost->reset();
 	for (size_t i = 0; i < 10; i++)
 		m_evmHost->accounts[EVMHost::convertToEVMC(account(i))].balance =
 			EVMHost::convertToEVMC(u256(1) << 100);
-
 }
 
 std::pair<bool, string> ExecutionFramework::compareAndCreateMessage(

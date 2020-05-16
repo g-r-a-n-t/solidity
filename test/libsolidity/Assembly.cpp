@@ -27,6 +27,7 @@
 
 #include <liblangutil/Scanner.h>
 #include <libsolidity/parsing/Parser.h>
+#include <libsolidity/analysis/DeclarationTypeChecker.h>
 #include <libsolidity/analysis/NameAndTypeResolver.h>
 #include <libsolidity/codegen/Compiler.h>
 #include <libsolidity/ast/AST.h>
@@ -57,9 +58,9 @@ evmasm::AssemblyItems compileContract(std::shared_ptr<CharStream> _sourceCode)
 	BOOST_REQUIRE_NO_THROW(sourceUnit = parser.parse(make_shared<Scanner>(_sourceCode)));
 	BOOST_CHECK(!!sourceUnit);
 
-	map<ASTNode const*, shared_ptr<DeclarationContainer>> scopes;
 	GlobalContext globalContext;
-	NameAndTypeResolver resolver(globalContext, solidity::test::CommonOptions::get().evmVersion(), scopes, errorReporter);
+	NameAndTypeResolver resolver(globalContext, solidity::test::CommonOptions::get().evmVersion(), errorReporter);
+	DeclarationTypeChecker declarationTypeChecker(errorReporter, solidity::test::CommonOptions::get().evmVersion());
 	solAssert(Error::containsOnlyWarnings(errorReporter.errors()), "");
 	resolver.registerDeclarations(*sourceUnit);
 	for (ASTPointer<ASTNode> const& node: sourceUnit->nodes())
@@ -69,6 +70,12 @@ evmasm::AssemblyItems compileContract(std::shared_ptr<CharStream> _sourceCode)
 			if (!Error::containsOnlyWarnings(errorReporter.errors()))
 				return AssemblyItems();
 		}
+	for (ASTPointer<ASTNode> const& node: sourceUnit->nodes())
+	{
+		BOOST_REQUIRE_NO_THROW(declarationTypeChecker.check(*node));
+		if (!Error::containsOnlyWarnings(errorReporter.errors()))
+			return AssemblyItems();
+	}
 	for (ASTPointer<ASTNode> const& node: sourceUnit->nodes())
 		if (ContractDefinition* contract = dynamic_cast<ContractDefinition*>(node.get()))
 		{

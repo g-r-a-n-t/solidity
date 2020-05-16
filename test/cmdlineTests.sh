@@ -31,28 +31,28 @@ set -e
 ## GLOBAL VARIABLES
 
 REPO_ROOT=$(cd $(dirname "$0")/.. && pwd)
-SOLIDITY_BUILD_DIR=${SOLIDITY_BUILD_DIR:-build}
+SOLIDITY_BUILD_DIR=${SOLIDITY_BUILD_DIR:-${REPO_ROOT}/build}
 source "${REPO_ROOT}/scripts/common.sh"
+source "${REPO_ROOT}/scripts/common_cmdline.sh"
 
 case "$OSTYPE" in
     msys)
-        SOLC="$REPO_ROOT/${SOLIDITY_BUILD_DIR}/solc/Release/solc.exe"
+        SOLC="${SOLIDITY_BUILD_DIR}/solc/Release/solc.exe"
 
         # prevents msys2 path translation for a remapping test
         export MSYS2_ARG_CONV_EXCL="="
         ;;
     *)
-        SOLC="$REPO_ROOT/${SOLIDITY_BUILD_DIR}/solc/solc"
+        SOLC="${SOLIDITY_BUILD_DIR}/solc/solc"
         ;;
 esac
+echo "${SOLC}"
 
 INTERACTIVE=true
 if ! tty -s || [ "$CI" ]
 then
     INTERACTIVE=""
 fi
-
-FULLARGS="--optimize --ignore-missing --combined-json abi,asm,ast,bin,bin-runtime,compact-format,devdoc,hashes,interface,metadata,opcodes,srcmap,srcmap-runtime,userdoc"
 
 # extend stack size in case we run via ASAN
 if [[ -n "${CIRCLECI}" ]] || [[ -n "$CI" ]]; then
@@ -61,52 +61,6 @@ if [[ -n "${CIRCLECI}" ]] || [[ -n "$CI" ]]; then
 fi
 
 ## FUNCTIONS
-
-function compileFull()
-{
-    local expected_exit_code=0
-    local expect_output=0
-    if [[ $1 = '-e' ]]
-    then
-        expected_exit_code=1
-        expect_output=1
-        shift;
-    fi
-    if [[ $1 = '-w' ]]
-    then
-        expect_output=1
-        shift;
-    fi
-
-    local files="$*"
-    local output
-
-    local stderr_path=$(mktemp)
-
-    set +e
-    "$SOLC" $FULLARGS $files >/dev/null 2>"$stderr_path"
-    local exit_code=$?
-    local errors=$(grep -v -E 'Warning: This is a pre-release compiler version|Warning: Experimental features are turned on|pragma experimental ABIEncoderV2|^ +--> |^ +\||^[0-9]+ +\|' < "$stderr_path")
-    set -e
-    rm "$stderr_path"
-
-    if [[ \
-        "$exit_code" -ne "$expected_exit_code" || \
-            ( $expect_output -eq 0 && -n "$errors" ) || \
-            ( $expect_output -ne 0 && -z "$errors" ) \
-    ]]
-    then
-        printError "Unexpected compilation result:"
-        printError "Expected failure: $expected_exit_code - Expected warning / error output: $expect_output"
-        printError "Was failure: $exit_code"
-        echo "$errors"
-        printError "While calling:"
-        echo "\"$SOLC\" $FULLARGS $files"
-        printError "Inside directory:"
-        pwd
-        false
-    fi
-}
 
 function ask_expectation_update()
 {
@@ -172,7 +126,7 @@ function test_solc_behaviour()
         # Remove trailing empty lines. Needs a line break to make OSX sed happy.
         sed -i.bak -e '1{/^$/d
 }' "$stderr_path"
-       rm "$stderr_path.bak"
+        rm "$stderr_path.bak" "$stdout_path.bak"
     fi
     # Remove path to cpp file
     sed -i.bak -e 's/^\(Exception while assembling:\).*/\1/' "$stderr_path"
@@ -221,6 +175,8 @@ function test_solc_behaviour()
             exit 1
         fi
     fi
+
+    rm -f "$stdout_path" "$stderr_path"
 }
 
 
@@ -260,7 +216,7 @@ printTask "Testing unknown options..."
     then
         echo "Passed"
     else
-        printError "Incorrect response to unknown options: $STDERR"
+        printError "Incorrect response to unknown options: $output"
         exit 1
     fi
 )
@@ -289,7 +245,18 @@ printTask "Running general commandline tests..."
             stdoutExpectationFile="${tdir}/output.json"
             args="--standard-json "$(cat ${tdir}/args 2>/dev/null || true)
         else
-            inputFile="${tdir}input.sol"
+            if [[ -e "${tdir}input.yul" && -e "${tdir}input.sol" ]]
+            then
+                printError "Ambiguous input. Found both input.sol and input.yul."
+                exit 1
+            fi
+
+            if [ -e "${tdir}input.yul" ]
+            then
+                inputFile="${tdir}input.yul"
+            else
+                inputFile="${tdir}input.sol"
+            fi
             stdin=""
             stdout="$(cat ${tdir}/output 2>/dev/null || true)"
             stdoutExpectationFile="${tdir}/output"
@@ -349,6 +316,10 @@ SOLTMPDIR=$(mktemp -d)
         if grep "This will report a warning" "$f" >/dev/null
         then
             opts="$opts -w"
+        fi
+        if grep "This may report a warning" "$f" >/dev/null
+        then
+            opts="$opts -o"
         fi
         compileFull $opts "$SOLTMPDIR/$f"
     done
@@ -427,7 +398,7 @@ SOLTMPDIR=$(mktemp -d)
     # This should fail
     if [[ !("$output" =~ "No input files given") || ($result == 0) ]]
     then
-        printError "Incorrect response to empty input arg list: $STDERR"
+        printError "Incorrect response to empty input arg list: $output"
         exit 1
     fi
 
@@ -473,8 +444,8 @@ SOLTMPDIR=$(mktemp -d)
     "$REPO_ROOT"/scripts/isolate_tests.py "$REPO_ROOT"/test/
     "$REPO_ROOT"/scripts/isolate_tests.py "$REPO_ROOT"/docs/ docs
 
-    echo *.sol | xargs -P 4 -n 50 "$REPO_ROOT"/${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer --quiet --input-files
-    echo *.sol | xargs -P 4 -n 50 "$REPO_ROOT"/${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer --without-optimizer --quiet --input-files
+    echo *.sol | xargs -P 4 -n 50 "${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer" --quiet --input-files
+    echo *.sol | xargs -P 4 -n 50 "${SOLIDITY_BUILD_DIR}/test/tools/solfuzzer" --without-optimizer --quiet --input-files
 )
 rm -rf "$SOLTMPDIR"
 

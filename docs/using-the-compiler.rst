@@ -106,7 +106,8 @@ Target options
 Below is a list of target EVM versions and the compiler-relevant changes introduced
 at each version. Backward compatibility is not guaranteed between each version.
 
-- ``homestead`` (oldest version)
+- ``homestead``
+   - (oldest version)
 - ``tangerineWhistle``
    - Gas cost for access to other accounts increased, relevant for gas estimation and the optimizer.
    - All gas sent by default for external calls, previously a certain amount had to be retained.
@@ -230,7 +231,10 @@ Input Description
             "yulDetails": {
               // Improve allocation of stack slots for variables, can free up stack slots early.
               // Activated by default if the Yul optimizer is activated.
-              "stackAllocation": true
+              "stackAllocation": true,
+              // Select optimization steps to be applied.
+              // Optional, the optimizer will use the default sequence if omitted.
+              "optimizerSteps": "dhfoDgvulfnTUtnIf..."
             }
           }
         },
@@ -302,7 +306,8 @@ Input Description
         //   evm.bytecode.opcodes - Opcodes list
         //   evm.bytecode.sourceMap - Source mapping (useful for debugging)
         //   evm.bytecode.linkReferences - Link references (if unlinked object)
-        //   evm.deployedBytecode* - Deployed bytecode (has the same options as evm.bytecode)
+        //   evm.deployedBytecode* - Deployed bytecode (has all the options that evm.bytecode has)
+        //   evm.deployedBytecode.immutableReferences - Map from AST ids to bytecode ranges that reference immutables
         //   evm.methodIdentifiers - The list of function hashes
         //   evm.gasEstimates - Function gas estimates
         //   ewasm.wast - eWASM S-expressions format (not supported at the moment)
@@ -424,8 +429,14 @@ Output Description
                   }
                 }
               },
-              // The same layout as above.
-              "deployedBytecode": { },
+              "deployedBytecode": {
+                ..., // The same layout as above.
+                "immutableReferences": [
+                  // There are two references to the immutable with AST ID 3, both 32 bytes long. One is
+                  // at bytecode offset 42, the other at bytecode offset 80.
+                  "3": [{ "start": 42, "length": 32 }, { "start": 80, "length": 32 }]
+                ]
+              },
               // The list of function hashes
               "methodIdentifiers": {
                 "delegate(address)": "5c19a95c"
@@ -605,8 +616,9 @@ Assume you have the following contracts you want to update declared in ``Source.
 
 .. code-block:: none
 
-    // This will not compile
-    pragma solidity >0.4.23;
+    // This will not compile after 0.5.0
+    // SPDX-License-Identifier: GPL-3.0
+    pragma solidity >0.4.23 <0.5.0;
 
     contract Updateable {
         function run() public view returns (bool);
@@ -685,9 +697,10 @@ Review changes
 
 The command above applies all changes as shown below. Please review them carefully.
 
-.. code-block:: none
+.. code-block:: solidity
 
-    pragma solidity >0.4.23;
+    // SPDX-License-Identifier: GPL-3.0
+    pragma solidity >=0.6.0 <0.7.0;
 
     abstract contract Updateable {
         function run() public view virtual returns (bool);

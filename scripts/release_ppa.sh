@@ -55,9 +55,9 @@ keyid=70D110489D66E2F6
 email=builds@ethereum.org
 packagename=solc
 
-static_build_distribution=disco
+static_build_distribution=focal
 
-DISTRIBUTIONS="bionic disco eoan focal"
+DISTRIBUTIONS="bionic eoan focal"
 
 if is_release
 then
@@ -85,17 +85,17 @@ else
     fi
     if [ $distribution = focal ]
     then
-        SMTDEPENDENCY="libz3-dev,
-               libcvc4-dev,
-               "
+        SMTDEPENDENCY="libz3-static-dev,
+            libcvc4-dev,
+            "
     elif [ $distribution = disco ]
     then
         SMTDEPENDENCY="libz3-static-dev,
-               libcvc4-dev,
-               "
+            libcvc4-dev,
+            "
     else
         SMTDEPENDENCY="libz3-static-dev,
-               "
+            "
     fi
     CMAKE_OPTIONS=""
 fi

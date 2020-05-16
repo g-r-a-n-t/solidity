@@ -70,32 +70,23 @@ private:
 
 	bool visit(Block const& _block) override;
 	void endVisit(Block const& _block) override;
+	bool visit(TryCatchClause const& _tryCatchClause) override;
+	void endVisit(TryCatchClause const& _tryCatchClause) override;
 	bool visit(ForStatement const& _for) override;
 	void endVisit(ForStatement const& _for) override;
 	void endVisit(VariableDeclarationStatement const& _varDeclStatement) override;
 	bool visit(Identifier const& _identifier) override;
-	bool visit(ElementaryTypeName const& _typeName) override;
 	bool visit(FunctionDefinition const& _functionDefinition) override;
 	void endVisit(FunctionDefinition const& _functionDefinition) override;
 	bool visit(ModifierDefinition const& _modifierDefinition) override;
 	void endVisit(ModifierDefinition const& _modifierDefinition) override;
 	void endVisit(UserDefinedTypeName const& _typeName) override;
-	void endVisit(FunctionTypeName const& _typeName) override;
-	void endVisit(Mapping const& _mapping) override;
-	void endVisit(ArrayTypeName const& _typeName) override;
 	bool visit(InlineAssembly const& _inlineAssembly) override;
 	bool visit(Return const& _return) override;
-	void endVisit(VariableDeclaration const& _variable) override;
 
 	void operator()(yul::FunctionDefinition const& _function) override;
 	void operator()(yul::Identifier const& _identifier) override;
 	void operator()(yul::VariableDeclaration const& _varDecl) override;
-
-	/// Adds a new error to the list of errors.
-	void typeError(langutil::SourceLocation const& _location, std::string const& _description);
-
-	/// Adds a new error to the list of errors and throws to abort reference resolving.
-	void fatalTypeError(langutil::SourceLocation const& _location, std::string const& _description);
 
 	/// Adds a new error to the list of errors.
 	void declarationError(langutil::SourceLocation const& _location, std::string const& _description);

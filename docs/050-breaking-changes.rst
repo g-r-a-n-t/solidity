@@ -292,8 +292,10 @@ Consider you have the following pre-0.5.0 contract already deployed:
 
 ::
 
-    // This will not compile with the current version of the compiler
+    // SPDX-License-Identifier: GPL-3.0
     pragma solidity ^0.4.25;
+    // This will report a warning until version 0.4.25 of the compiler
+    // This will not compile after 0.5.0
     contract OldContract {
         function someOldFunction(uint8 a) {
             //...
@@ -308,6 +310,7 @@ This will no longer compile with Solidity v0.5.0. However, you can define a comp
 
 ::
 
+    // SPDX-License-Identifier: GPL-3.0
     pragma solidity >=0.5.0 <0.7.0;
     interface OldContract {
         function someOldFunction(uint8 a) external;
@@ -325,6 +328,7 @@ Given the interface defined above, you can now easily use the already deployed p
 
 ::
 
+    // SPDX-License-Identifier: GPL-3.0
     pragma solidity >=0.5.0 <0.7.0;
 
     interface OldContract {
@@ -346,6 +350,7 @@ commandline compiler for linking):
 ::
 
     // This will not compile after 0.6.0
+    // SPDX-License-Identifier: GPL-3.0
     pragma solidity >=0.5.0 <0.5.99;
 
     library OldLibrary {
@@ -369,8 +374,9 @@ Old version:
 
 ::
 
-    // This will not compile
+    // SPDX-License-Identifier: GPL-3.0
     pragma solidity ^0.4.25;
+    // This will not compile after 0.5.0
 
     contract OtherContract {
         uint x;
@@ -396,7 +402,7 @@ Old version:
             // Throw is fine in this version.
             if (x > 100)
                 throw;
-            bytes b = new bytes(x);
+            bytes memory b = new bytes(x);
             y = -3 >> 1;
             // y == -1 (wrong, should be -2)
             do {
@@ -431,14 +437,16 @@ New version:
 
 ::
 
-    pragma solidity >=0.5.0 <0.7.0;
+    // SPDX-License-Identifier: GPL-3.0
+    pragma solidity >=0.5.0 <0.5.99;
+    // This will not compile after 0.6.0
 
     contract OtherContract {
         uint x;
         function f(uint y) external {
             x = y;
         }
-        receive() payable external {}
+        function() payable external {}
     }
 
     contract New {

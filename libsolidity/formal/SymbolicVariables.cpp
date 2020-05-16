@@ -86,6 +86,12 @@ smt::Expression SymbolicVariable::resetIndex()
 	return currentValue();
 }
 
+smt::Expression SymbolicVariable::setIndex(unsigned _index)
+{
+	m_ssa->setIndex(_index);
+	return currentValue();
+}
+
 smt::Expression SymbolicVariable::increaseIndex()
 {
 	++(*m_ssa);
@@ -179,6 +185,12 @@ smt::Expression SymbolicFunctionVariable::resetIndex()
 	return m_abstract.resetIndex();
 }
 
+smt::Expression SymbolicFunctionVariable::setIndex(unsigned _index)
+{
+	SymbolicVariable::setIndex(_index);
+	return m_abstract.setIndex(_index);
+}
+
 smt::Expression SymbolicFunctionVariable::increaseIndex()
 {
 	++(*m_ssa);
@@ -195,40 +207,6 @@ smt::Expression SymbolicFunctionVariable::operator()(vector<smt::Expression> _ar
 void SymbolicFunctionVariable::resetDeclaration()
 {
 	m_declaration = m_context.newVariable(currentName(), m_sort);
-}
-
-SymbolicMappingVariable::SymbolicMappingVariable(
-	frontend::TypePointer _type,
-	string _uniqueName,
-	EncodingContext& _context
-):
-	SymbolicVariable(_type, _type, move(_uniqueName), _context)
-{
-	solAssert(isMapping(m_type->category()), "");
-}
-
-SymbolicArrayVariable::SymbolicArrayVariable(
-	frontend::TypePointer _type,
-	frontend::TypePointer _originalType,
-	string _uniqueName,
-	EncodingContext& _context
-):
-	SymbolicVariable(_type, _originalType, move(_uniqueName), _context)
-{
-	solAssert(isArray(m_type->category()), "");
-}
-
-smt::Expression SymbolicArrayVariable::currentValue(frontend::TypePointer const& _targetType) const
-{
-	if (_targetType)
-		// StringLiterals are encoded as SMT arrays in the generic case,
-		// but they can also be compared/assigned to fixed bytes, in which
-		// case they'd need to be encoded as numbers.
-		if (auto strType = dynamic_cast<StringLiteralType const*>(m_originalType))
-			if (_targetType->category() == frontend::Type::Category::FixedBytes)
-				return smt::Expression(u256(toHex(util::asBytes(strType->value()), util::HexPrefix::Add)));
-
-	return SymbolicVariable::currentValue(_targetType);
 }
 
 SymbolicEnumVariable::SymbolicEnumVariable(
@@ -249,16 +227,93 @@ SymbolicTupleVariable::SymbolicTupleVariable(
 	SymbolicVariable(_type, _type, move(_uniqueName), _context)
 {
 	solAssert(isTuple(m_type->category()), "");
-	auto const& tupleType = dynamic_cast<TupleType const&>(*m_type);
-	auto const& componentsTypes = tupleType.components();
-	for (unsigned i = 0; i < componentsTypes.size(); ++i)
-		if (componentsTypes.at(i))
-		{
-			string componentName = m_uniqueName + "_component_" + to_string(i);
-			auto result = smt::newSymbolicVariable(*componentsTypes.at(i), componentName, m_context);
-			solAssert(result.second, "");
-			m_components.emplace_back(move(result.second));
-		}
-		else
-			m_components.emplace_back(nullptr);
+}
+
+SymbolicTupleVariable::SymbolicTupleVariable(
+	SortPointer _sort,
+	string _uniqueName,
+	EncodingContext& _context
+):
+	SymbolicVariable(move(_sort), move(_uniqueName), _context)
+{
+	solAssert(m_sort->kind == Kind::Tuple, "");
+}
+
+vector<SortPointer> const& SymbolicTupleVariable::components()
+{
+	auto tupleSort = dynamic_pointer_cast<TupleSort>(m_sort);
+	solAssert(tupleSort, "");
+	return tupleSort->components;
+}
+
+smt::Expression SymbolicTupleVariable::component(
+	size_t _index,
+	TypePointer _fromType,
+	TypePointer _toType
+)
+{
+	optional<smt::Expression> conversion = symbolicTypeConversion(_fromType, _toType);
+	if (conversion)
+		return *conversion;
+
+	return smt::Expression::tuple_get(currentValue(), _index);
+}
+
+SymbolicArrayVariable::SymbolicArrayVariable(
+	frontend::TypePointer _type,
+	frontend::TypePointer _originalType,
+	string _uniqueName,
+	EncodingContext& _context
+):
+	SymbolicVariable(_type, _originalType, move(_uniqueName), _context),
+	m_pair(
+		smtSort(*_type),
+		m_uniqueName + "_length_pair",
+		m_context
+	)
+{
+	solAssert(isArray(m_type->category()) || isMapping(m_type->category()), "");
+}
+
+SymbolicArrayVariable::SymbolicArrayVariable(
+	SortPointer _sort,
+	string _uniqueName,
+	EncodingContext& _context
+):
+	SymbolicVariable(move(_sort), move(_uniqueName), _context),
+	m_pair(
+		std::make_shared<TupleSort>(
+			"array_length_pair",
+			std::vector<std::string>{"array", "length"},
+			std::vector<SortPointer>{m_sort, SortProvider::intSort}
+		),
+		m_uniqueName + "_array_length_pair",
+		m_context
+	)
+{
+	solAssert(m_sort->kind == Kind::Array, "");
+}
+
+smt::Expression SymbolicArrayVariable::currentValue(frontend::TypePointer const& _targetType) const
+{
+	optional<smt::Expression> conversion = symbolicTypeConversion(m_originalType, _targetType);
+	if (conversion)
+		return *conversion;
+
+	return m_pair.currentValue();
+}
+
+smt::Expression SymbolicArrayVariable::valueAtIndex(int _index) const
+{
+	return m_pair.valueAtIndex(_index);
+}
+
+smt::Expression SymbolicArrayVariable::elements()
+{
+	return m_pair.component(0);
+}
+
+smt::Expression SymbolicArrayVariable::length()
+{
+	return m_pair.component(1);
 }

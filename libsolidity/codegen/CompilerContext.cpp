@@ -71,6 +71,49 @@ void CompilerContext::addStateVariable(
 	m_stateVariables[&_declaration] = make_pair(_storageOffset, _byteOffset);
 }
 
+void CompilerContext::addImmutable(VariableDeclaration const& _variable)
+{
+	solAssert(_variable.immutable(), "Attempted to register a non-immutable variable as immutable.");
+	solUnimplementedAssert(_variable.annotation().type->isValueType(), "Only immutable variables of value type are supported.");
+	solAssert(m_runtimeContext, "Attempted to register an immutable variable for runtime code generation.");
+	m_immutableVariables[&_variable] = CompilerUtils::generalPurposeMemoryStart + *m_reservedMemory;
+	solAssert(_variable.annotation().type->memoryHeadSize() == 32, "Memory writes might overlap.");
+	*m_reservedMemory += _variable.annotation().type->memoryHeadSize();
+}
+
+size_t CompilerContext::immutableMemoryOffset(VariableDeclaration const& _variable) const
+{
+	solAssert(m_immutableVariables.count(&_variable), "Memory offset of unknown immutable queried.");
+	solAssert(m_runtimeContext, "Attempted to fetch the memory offset of an immutable variable during runtime code generation.");
+	return m_immutableVariables.at(&_variable);
+}
+
+vector<string> CompilerContext::immutableVariableSlotNames(VariableDeclaration const& _variable)
+{
+	string baseName = to_string(_variable.id());
+	solAssert(_variable.annotation().type->sizeOnStack() > 0, "");
+	if (_variable.annotation().type->sizeOnStack() == 1)
+		return {baseName};
+	vector<string> names;
+	auto collectSlotNames = [&](string const& _baseName, TypePointer type, auto const& _recurse) -> void {
+		for (auto const& [slot, type]: type->stackItems())
+			if (type)
+				_recurse(_baseName + " " + slot, type, _recurse);
+			else
+				names.emplace_back(_baseName);
+	};
+	collectSlotNames(baseName, _variable.annotation().type, collectSlotNames);
+	return names;
+}
+
+size_t CompilerContext::reservedMemory()
+{
+	solAssert(m_reservedMemory.has_value(), "Reserved memory was used before ");
+	size_t reservedMemory = *m_reservedMemory;
+	m_reservedMemory = std::nullopt;
+	return reservedMemory;
+}
+
 void CompilerContext::startFunction(Declaration const& _function)
 {
 	m_functionCompilationQueue.startFunction(_function);
@@ -90,6 +133,20 @@ void CompilerContext::callLowLevelFunction(
 	*this << lowLevelFunctionTag(_name, _inArgs, _outArgs, _generator);
 
 	appendJump(evmasm::AssemblyItem::JumpType::IntoFunction);
+	adjustStackOffset(int(_outArgs) - 1 - _inArgs);
+	*this << retTag.tag();
+}
+
+void CompilerContext::callYulFunction(
+	string const& _name,
+	unsigned _inArgs,
+	unsigned _outArgs
+)
+{
+	m_externallyUsedYulFunctions.insert(_name);
+	auto const retTag = pushNewTag();
+	CompilerUtils(*this).moveIntoStack(_inArgs);
+	appendJumpTo(namedTag(_name));
 	adjustStackOffset(int(_outArgs) - 1 - _inArgs);
 	*this << retTag.tag();
 }
@@ -131,6 +188,16 @@ void CompilerContext::appendMissingLowLevelFunctions()
 		appendJump(evmasm::AssemblyItem::JumpType::OutOfFunction);
 		solAssert(stackHeight() == outArgs, "Invalid stack height in low-level function " + name + ".");
 	}
+}
+
+pair<string, set<string>> CompilerContext::requestedYulFunctions()
+{
+	solAssert(!m_requestedYulFunctionsRan, "requestedYulFunctions called more than once.");
+	m_requestedYulFunctionsRan = true;
+
+	set<string> empty;
+	swap(empty, m_externallyUsedYulFunctions);
+	return {m_yulFunctionCollector.requestedFunctions(), std::move(empty)};
 }
 
 void CompilerContext::addVariable(
@@ -202,55 +269,23 @@ evmasm::AssemblyItem CompilerContext::functionEntryLabelIfExists(Declaration con
 	return m_functionCompilationQueue.entryLabelIfExists(_declaration);
 }
 
-FunctionDefinition const& CompilerContext::resolveVirtualFunction(FunctionDefinition const& _function)
-{
-	// Libraries do not allow inheritance and their functions can be inlined, so we should not
-	// search the inheritance hierarchy (which will be the wrong one in case the function
-	// is inlined).
-	if (auto scope = dynamic_cast<ContractDefinition const*>(_function.scope()))
-		if (scope->isLibrary())
-			return _function;
-	solAssert(!m_inheritanceHierarchy.empty(), "No inheritance hierarchy set.");
-	return resolveVirtualFunction(_function, m_inheritanceHierarchy.begin());
-}
-
 FunctionDefinition const& CompilerContext::superFunction(FunctionDefinition const& _function, ContractDefinition const& _base)
 {
-	solAssert(!m_inheritanceHierarchy.empty(), "No inheritance hierarchy set.");
-	return resolveVirtualFunction(_function, superContract(_base));
+	solAssert(m_mostDerivedContract, "No most derived contract set.");
+	ContractDefinition const* super = _base.superContract(mostDerivedContract());
+	solAssert(super, "Super contract not available.");
+	return _function.resolveVirtual(mostDerivedContract(), super);
 }
 
-FunctionDefinition const* CompilerContext::nextConstructor(ContractDefinition const& _contract) const
+ContractDefinition const& CompilerContext::mostDerivedContract() const
 {
-	vector<ContractDefinition const*>::const_iterator it = superContract(_contract);
-	for (; it != m_inheritanceHierarchy.end(); ++it)
-		if ((*it)->constructor())
-			return (*it)->constructor();
-
-	return nullptr;
+	solAssert(m_mostDerivedContract, "Most derived contract not set.");
+	return *m_mostDerivedContract;
 }
 
 Declaration const* CompilerContext::nextFunctionToCompile() const
 {
 	return m_functionCompilationQueue.nextFunctionToCompile();
-}
-
-ModifierDefinition const& CompilerContext::resolveVirtualFunctionModifier(
-	ModifierDefinition const& _modifier
-) const
-{
-	// Libraries do not allow inheritance and their functions can be inlined, so we should not
-	// search the inheritance hierarchy (which will be the wrong one in case the function
-	// is inlined).
-	if (auto scope = dynamic_cast<ContractDefinition const*>(_modifier.scope()))
-		if (scope->isLibrary())
-			return _modifier;
-	solAssert(!m_inheritanceHierarchy.empty(), "No inheritance hierarchy set.");
-	for (ContractDefinition const* contract: m_inheritanceHierarchy)
-		for (ModifierDefinition const* modifier: contract->functionModifiers())
-			if (modifier->name() == _modifier.name())
-				return *modifier;
-	solAssert(false, "Function modifier " + _modifier.name() + " not found in inheritance hierarchy.");
 }
 
 unsigned CompilerContext::baseStackOffsetOfVariable(Declaration const& _declaration) const
@@ -470,6 +505,7 @@ void CompilerContext::optimizeYul(yul::Object& _object, yul::EVMDialect const& _
 		&meter,
 		_object,
 		_optimiserSettings.optimizeStackAllocation,
+		_optimiserSettings.yulOptimiserSteps,
 		_externalIdentifiers
 	);
 
@@ -479,32 +515,11 @@ void CompilerContext::optimizeYul(yul::Object& _object, yul::EVMDialect const& _
 #endif
 }
 
-FunctionDefinition const& CompilerContext::resolveVirtualFunction(
-	FunctionDefinition const& _function,
-	vector<ContractDefinition const*>::const_iterator _searchStart
-)
+LinkerObject const& CompilerContext::assembledObject() const
 {
-	string name = _function.name();
-	FunctionType functionType(_function);
-	auto it = _searchStart;
-	for (; it != m_inheritanceHierarchy.end(); ++it)
-		for (FunctionDefinition const* function: (*it)->definedFunctions())
-			if (
-				function->name() == name &&
-				!function->isConstructor() &&
-				FunctionType(*function).asCallableFunction(false)->hasEqualParameterTypes(functionType)
-			)
-				return *function;
-	solAssert(false, "Super function " + name + " not found.");
-	return _function; // not reached
-}
-
-vector<ContractDefinition const*>::const_iterator CompilerContext::superContract(ContractDefinition const& _contract) const
-{
-	solAssert(!m_inheritanceHierarchy.empty(), "No inheritance hierarchy set.");
-	auto it = find(m_inheritanceHierarchy.begin(), m_inheritanceHierarchy.end(), &_contract);
-	solAssert(it != m_inheritanceHierarchy.end(), "Base not found in inheritance hierarchy.");
-	return ++it;
+	LinkerObject const& object = m_asm->assemble();
+	solAssert(object.immutableReferences.empty(), "Leftover immutables.");
+	return object;
 }
 
 string CompilerContext::revertReasonIfDebug(string const& _message)

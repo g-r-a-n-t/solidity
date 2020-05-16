@@ -15,9 +15,10 @@
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <test/yulPhaser/Common.h>
+#include <test/yulPhaser/TestHelpers.h>
 
 #include <tools/yulPhaser/Chromosome.h>
+#include <tools/yulPhaser/PairSelections.h>
 #include <tools/yulPhaser/Population.h>
 #include <tools/yulPhaser/Program.h>
 #include <tools/yulPhaser/Selections.h>
@@ -31,6 +32,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <cmath>
 #include <optional>
 #include <string>
 #include <sstream>
@@ -46,6 +48,14 @@ namespace solidity::phaser::test
 class PopulationFixture
 {
 protected:
+	static ChromosomePair twoStepSwap(Chromosome const& _chromosome1, Chromosome const& _chromosome2)
+	{
+		return ChromosomePair{
+			Chromosome(vector<string>{_chromosome1.optimisationSteps()[0], _chromosome2.optimisationSteps()[1]}),
+			Chromosome(vector<string>{_chromosome2.optimisationSteps()[0], _chromosome1.optimisationSteps()[1]}),
+		};
+	}
+
 	shared_ptr<FitnessMetric> m_fitnessMetric = make_shared<ChromosomeLengthMetric>();
 };
 
@@ -100,6 +110,23 @@ BOOST_FIXTURE_TEST_CASE(constructor_should_copy_chromosomes_compute_fitness_and_
 	BOOST_TEST(individuals[0].chromosome == chromosomes[0]);
 	BOOST_TEST(individuals[1].chromosome == chromosomes[2]);
 	BOOST_TEST(individuals[2].chromosome == chromosomes[1]);
+}
+
+BOOST_FIXTURE_TEST_CASE(constructor_should_accept_individuals_without_recalculating_fitness, PopulationFixture)
+{
+	vector<Individual> customIndividuals = {
+		Individual(Chromosome("aaaccc"), 20),
+		Individual(Chromosome("aaa"), 10),
+		Individual(Chromosome("aaaf"), 30),
+	};
+	assert(customIndividuals[0].fitness != m_fitnessMetric->evaluate(customIndividuals[0].chromosome));
+	assert(customIndividuals[1].fitness != m_fitnessMetric->evaluate(customIndividuals[1].chromosome));
+	assert(customIndividuals[2].fitness != m_fitnessMetric->evaluate(customIndividuals[2].chromosome));
+
+	Population population(m_fitnessMetric, customIndividuals);
+
+	vector<Individual> expectedIndividuals{customIndividuals[1], customIndividuals[0], customIndividuals[2]};
+	BOOST_TEST(population.individuals() == expectedIndividuals);
 }
 
 BOOST_FIXTURE_TEST_CASE(makeRandom_should_get_chromosome_lengths_from_specified_generator, PopulationFixture)
@@ -224,6 +251,125 @@ BOOST_FIXTURE_TEST_CASE(select_should_return_empty_population_if_selection_is_em
 	assert(selection.materialise(population.individuals().size()).empty());
 
 	BOOST_TEST(population.select(selection).individuals().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(mutate_should_return_population_containing_individuals_indicated_by_selection_with_mutation_applied, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc"), Chromosome("gg"), Chromosome("hh")});
+	RangeSelection selection(0.25, 0.75);
+	assert(selection.materialise(population.individuals().size()) == (vector<size_t>{1, 2}));
+
+	Population expectedPopulation(m_fitnessMetric, {Chromosome("fc"), Chromosome("fg")});
+
+	BOOST_TEST(population.mutate(selection, geneSubstitution(0, BlockFlattener::name)) == expectedPopulation);
+}
+
+BOOST_FIXTURE_TEST_CASE(mutate_should_include_duplicates_if_selection_contains_duplicates, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("aa")});
+	RangeSelection selection(0.0, 1.0);
+	assert(selection.materialise(population.individuals().size()) == (vector<size_t>{0, 1}));
+
+	BOOST_TEST(
+		population.mutate(selection, geneSubstitution(0, BlockFlattener::name)) ==
+		Population(m_fitnessMetric, {Chromosome("fa"), Chromosome("fa")})
+	);
+}
+
+BOOST_FIXTURE_TEST_CASE(mutate_should_return_empty_population_if_selection_is_empty, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc")});
+	RangeSelection selection(0.0, 0.0);
+	assert(selection.materialise(population.individuals().size()).empty());
+
+	BOOST_TEST(population.mutate(selection, geneSubstitution(0, BlockFlattener::name)).individuals().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(crossover_should_return_population_containing_individuals_indicated_by_selection_with_crossover_applied, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc"), Chromosome("gg"), Chromosome("hh")});
+	PairMosaicSelection selection({{0, 1}, {2, 1}}, 1.0);
+	assert(selection.materialise(population.individuals().size()) == (vector<tuple<size_t, size_t>>{{0, 1}, {2, 1}, {0, 1}, {2, 1}}));
+
+	Population expectedPopulation(m_fitnessMetric, {Chromosome("ac"), Chromosome("ac"), Chromosome("gc"), Chromosome("gc")});
+
+	BOOST_TEST(population.crossover(selection, fixedPointCrossover(0.5)) == expectedPopulation);
+}
+
+BOOST_FIXTURE_TEST_CASE(crossover_should_include_duplicates_if_selection_contains_duplicates, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("aa")});
+	PairMosaicSelection selection({{0, 0}, {1, 1}}, 2.0);
+	assert(selection.materialise(population.individuals().size()) == (vector<tuple<size_t, size_t>>{{0, 0}, {1, 1}, {0, 0}, {1, 1}}));
+
+	BOOST_TEST(
+		population.crossover(selection, fixedPointCrossover(0.5)) ==
+		Population(m_fitnessMetric, {Chromosome("aa"), Chromosome("aa"), Chromosome("aa"), Chromosome("aa")})
+	);
+}
+
+BOOST_FIXTURE_TEST_CASE(crossover_should_return_empty_population_if_selection_is_empty, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc")});
+	PairMosaicSelection selection({}, 0.0);
+	assert(selection.materialise(population.individuals().size()).empty());
+
+	BOOST_TEST(population.crossover(selection, fixedPointCrossover(0.5)).individuals().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(symmetricCrossoverWithRemainder_should_return_crossed_population_and_remainder, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc"), Chromosome("gg"), Chromosome("hh")});
+	PairMosaicSelection selection({{2, 1}}, 0.25);
+	assert(selection.materialise(population.individuals().size()) == (vector<tuple<size_t, size_t>>{{2, 1}}));
+
+	Population expectedCrossedPopulation(m_fitnessMetric, {Chromosome("gc"), Chromosome("cg")});
+	Population expectedRemainder(m_fitnessMetric, {Chromosome("aa"), Chromosome("hh")});
+
+	BOOST_TEST(
+		population.symmetricCrossoverWithRemainder(selection, twoStepSwap) ==
+		(tuple<Population, Population>{expectedCrossedPopulation, expectedRemainder})
+	);
+}
+
+BOOST_FIXTURE_TEST_CASE(symmetricCrossoverWithRemainder_should_allow_crossing_the_same_individual_multiple_times, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc"), Chromosome("gg"), Chromosome("hh")});
+	PairMosaicSelection selection({{0, 0}, {2, 1}}, 1.0);
+	assert(selection.materialise(population.individuals().size()) == (vector<tuple<size_t, size_t>>{{0, 0}, {2, 1}, {0, 0}, {2, 1}}));
+
+	Population expectedCrossedPopulation(m_fitnessMetric, {
+		Chromosome("aa"), Chromosome("aa"),
+		Chromosome("aa"), Chromosome("aa"),
+		Chromosome("gc"), Chromosome("cg"),
+		Chromosome("gc"), Chromosome("cg"),
+	});
+	Population expectedRemainder(m_fitnessMetric, {Chromosome("hh")});
+
+	BOOST_TEST(
+		population.symmetricCrossoverWithRemainder(selection, twoStepSwap) ==
+		(tuple<Population, Population>{expectedCrossedPopulation, expectedRemainder})
+	);
+}
+
+BOOST_FIXTURE_TEST_CASE(symmetricCrossoverWithRemainder_should_return_empty_population_if_selection_is_empty, PopulationFixture)
+{
+	Population population(m_fitnessMetric, {Chromosome("aa"), Chromosome("cc")});
+	PairMosaicSelection selection({}, 0.0);
+	assert(selection.materialise(population.individuals().size()).empty());
+
+	BOOST_TEST(
+		population.symmetricCrossoverWithRemainder(selection, twoStepSwap) ==
+		(tuple<Population, Population>{Population(m_fitnessMetric), population})
+	);
+}
+
+BOOST_FIXTURE_TEST_CASE(combine_should_add_two_populations_from_a_pair, PopulationFixture)
+{
+	Population population1(m_fitnessMetric, {Chromosome("aa"), Chromosome("hh")});
+	Population population2(m_fitnessMetric, {Chromosome("gg"), Chromosome("cc")});
+
+	BOOST_TEST(Population::combine({population1, population2}) == population1 + population2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

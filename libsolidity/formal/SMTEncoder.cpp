@@ -19,6 +19,7 @@
 
 #include <libsolidity/ast/TypeProvider.h>
 #include <libsolidity/formal/SMTPortfolio.h>
+#include <libsolidity/formal/SymbolicState.h>
 #include <libsolidity/formal/SymbolicTypes.h>
 
 #include <boost/range/adaptors.hpp>
@@ -106,6 +107,9 @@ void SMTEncoder::endVisit(ContractDefinition const& _contract)
 
 	solAssert(m_currentContract == &_contract, "");
 	m_currentContract = nullptr;
+
+	if (m_callStack.empty())
+		m_context.popSolver();
 }
 
 void SMTEncoder::endVisit(VariableDeclaration const& _varDecl)
@@ -190,7 +194,8 @@ void SMTEncoder::inlineModifierInvocation(ModifierInvocation const* _invocation,
 	pushCallStack({_definition, _invocation});
 	if (auto modifier = dynamic_cast<ModifierDefinition const*>(_definition))
 	{
-		modifier->body().accept(*this);
+		if (modifier->isImplemented())
+			modifier->body().accept(*this);
 		popCallStack();
 	}
 	else if (auto function = dynamic_cast<FunctionDefinition const*>(_definition))
@@ -261,6 +266,7 @@ void SMTEncoder::endVisit(FunctionDefinition const&)
 bool SMTEncoder::visit(InlineAssembly const& _inlineAsm)
 {
 	m_errorReporter.warning(
+		7737_error,
 		_inlineAsm.location(),
 		"Assertion checker does not support inline assembly."
 	);
@@ -295,16 +301,22 @@ void SMTEncoder::endVisit(VariableDeclarationStatement const& _varDecl)
 		{
 			auto symbTuple = dynamic_pointer_cast<smt::SymbolicTupleVariable>(m_context.expression(*init));
 			solAssert(symbTuple, "");
-			auto const& components = symbTuple->components();
+			auto const& symbComponents = symbTuple->components();
+
+			auto tupleType = dynamic_cast<TupleType const*>(init->annotation().type);
+			solAssert(tupleType, "");
+			solAssert(tupleType->components().size() == symbTuple->components().size(), "");
+			auto const& components = tupleType->components();
+
 			auto const& declarations = _varDecl.declarations();
-			solAssert(components.size() == declarations.size(), "");
+			solAssert(symbComponents.size() == declarations.size(), "");
 			for (unsigned i = 0; i < declarations.size(); ++i)
 				if (
 					components.at(i) &&
 					declarations.at(i) &&
 					m_context.knownVariable(*declarations.at(i))
 				)
-					assignment(*declarations.at(i), components.at(i)->currentValue(declarations.at(i)->type()));
+					assignment(*declarations.at(i), symbTuple->component(i, components.at(i), declarations.at(i)->type()));
 		}
 	}
 	else if (m_context.knownVariable(*_varDecl.declarations().front()))
@@ -314,6 +326,7 @@ void SMTEncoder::endVisit(VariableDeclarationStatement const& _varDecl)
 	}
 	else
 		m_errorReporter.warning(
+			7186_error,
 			_varDecl.location(),
 			"Assertion checker does not yet implement such variable declarations."
 		);
@@ -339,6 +352,7 @@ void SMTEncoder::endVisit(Assignment const& _assignment)
 			m_context.newValue(*varDecl);
 
 		m_errorReporter.warning(
+			9149_error,
 			_assignment.location(),
 			"Assertion checker does not yet implement this assignment operator."
 		);
@@ -353,7 +367,7 @@ void SMTEncoder::endVisit(Assignment const& _assignment)
 	{
 		auto const& type = _assignment.annotation().type;
 		vector<smt::Expression> rightArguments;
-		if (_assignment.rightHandSide().annotation().type->category() == Type::Category::Tuple)
+		if (auto const* tupleTypeRight = dynamic_cast<TupleType const*>(_assignment.rightHandSide().annotation().type))
 		{
 			auto symbTupleLeft = dynamic_pointer_cast<smt::SymbolicTupleVariable>(m_context.expression(_assignment.leftHandSide()));
 			solAssert(symbTupleLeft, "");
@@ -364,17 +378,16 @@ void SMTEncoder::endVisit(Assignment const& _assignment)
 			auto const& rightComponents = symbTupleRight->components();
 			solAssert(leftComponents.size() == rightComponents.size(), "");
 
-			for (unsigned i = 0; i < leftComponents.size(); ++i)
-			{
-				auto const& left = leftComponents.at(i);
-				auto const& right = rightComponents.at(i);
-				/// Right hand side tuple component cannot be empty.
-				solAssert(right, "");
-				if (left)
-					rightArguments.push_back(right->currentValue(left->originalType()));
-				else
-					rightArguments.push_back(right->currentValue());
-			}
+			auto tupleTypeLeft = dynamic_cast<TupleType const*>(_assignment.leftHandSide().annotation().type);
+			solAssert(tupleTypeLeft, "");
+			solAssert(tupleTypeLeft->components().size() == leftComponents.size(), "");
+			auto const& typesLeft = tupleTypeLeft->components();
+
+			solAssert(tupleTypeRight->components().size() == rightComponents.size(), "");
+			auto const& typesRight = tupleTypeRight->components();
+
+			for (unsigned i = 0; i < rightComponents.size(); ++i)
+				rightArguments.push_back(symbTupleRight->component(i, typesRight.at(i), typesLeft.at(i)));
 		}
 		else
 		{
@@ -399,6 +412,7 @@ void SMTEncoder::endVisit(TupleExpression const& _tuple)
 
 	if (_tuple.isInlineArray())
 		m_errorReporter.warning(
+			2177_error,
 			_tuple.location(),
 			"Assertion checker does not yet implement inline arrays."
 		);
@@ -407,20 +421,26 @@ void SMTEncoder::endVisit(TupleExpression const& _tuple)
 		auto const& symbTuple = dynamic_pointer_cast<smt::SymbolicTupleVariable>(m_context.expression(_tuple));
 		solAssert(symbTuple, "");
 		auto const& symbComponents = symbTuple->components();
-		auto const& tupleComponents = _tuple.components();
-		solAssert(symbComponents.size() == _tuple.components().size(), "");
+		auto const* tupleComponents = &_tuple.components();
+		while (tupleComponents->size() == 1)
+		{
+			auto innerTuple = dynamic_pointer_cast<TupleExpression>(tupleComponents->front());
+			solAssert(innerTuple, "");
+			tupleComponents = &innerTuple->components();
+		}
+		solAssert(symbComponents.size() == tupleComponents->size(), "");
 		for (unsigned i = 0; i < symbComponents.size(); ++i)
 		{
-			auto sComponent = symbComponents.at(i);
-			auto tComponent = tupleComponents.at(i);
-			if (sComponent && tComponent)
+			auto tComponent = tupleComponents->at(i);
+			if (tComponent)
 			{
 				if (auto varDecl = identifierToVariable(*tComponent))
-					m_context.addAssertion(sComponent->currentValue() == currentValue(*varDecl));
+					m_context.addAssertion(symbTuple->component(i) == currentValue(*varDecl));
 				else
 				{
-					solAssert(m_context.knownExpression(*tComponent), "");
-					m_context.addAssertion(sComponent->currentValue() == expr(*tComponent));
+					if (!m_context.knownExpression(*tComponent))
+						createExpr(*tComponent);
+					m_context.addAssertion(symbTuple->component(i) == expr(*tComponent));
 				}
 			}
 		}
@@ -442,6 +462,9 @@ void SMTEncoder::endVisit(UnaryOperation const& _op)
 
 	createExpr(_op);
 
+	if (_op.annotation().type->category() == Type::Category::FixedPoint)
+		return;
+
 	switch (_op.getOperator())
 	{
 	case Token::Not: // !
@@ -455,7 +478,7 @@ void SMTEncoder::endVisit(UnaryOperation const& _op)
 	{
 
 		solAssert(smt::isInteger(_op.annotation().type->category()), "");
-		solAssert(_op.subExpression().annotation().lValueRequested, "");
+		solAssert(_op.subExpression().annotation().willBeWrittenTo, "");
 		if (auto identifier = dynamic_cast<Identifier const*>(&_op.subExpression()))
 		{
 			auto decl = identifierToVariable(*identifier);
@@ -474,6 +497,7 @@ void SMTEncoder::endVisit(UnaryOperation const& _op)
 		}
 		else
 			m_errorReporter.warning(
+				1950_error,
 				_op.location(),
 				"Assertion checker does not yet implement such increments / decrements."
 			);
@@ -503,6 +527,7 @@ void SMTEncoder::endVisit(UnaryOperation const& _op)
 				arrayIndexAssignment(_op.subExpression(), symbVar->currentValue());
 			else
 				m_errorReporter.warning(
+					2683_error,
 					_op.location(),
 					"Assertion checker does not yet implement \"delete\" for this expression."
 				);
@@ -511,6 +536,7 @@ void SMTEncoder::endVisit(UnaryOperation const& _op)
 	}
 	default:
 		m_errorReporter.warning(
+			3682_error,
 			_op.location(),
 			"Assertion checker does not yet implement this operator."
 		);
@@ -549,6 +575,7 @@ void SMTEncoder::endVisit(BinaryOperation const& _op)
 		compareOperation(_op);
 	else
 		m_errorReporter.warning(
+			3876_error,
 			_op.location(),
 			"Assertion checker does not yet implement this operator."
 		);
@@ -561,6 +588,7 @@ void SMTEncoder::endVisit(FunctionCall const& _funCall)
 	if (_funCall.annotation().kind == FunctionCallKind::StructConstructorCall)
 	{
 		m_errorReporter.warning(
+			4639_error,
 			_funCall.location(),
 			"Assertion checker does not yet implement this expression."
 		);
@@ -612,14 +640,15 @@ void SMTEncoder::endVisit(FunctionCall const& _funCall)
 		auto const& value = args.front();
 		solAssert(value, "");
 
-		smt::Expression thisBalance = m_context.balance();
+		smt::Expression thisBalance = m_context.state().balance();
 		setSymbolicUnknownValue(thisBalance, TypeProvider::uint256(), m_context);
 
-		m_context.transfer(m_context.thisAddress(), expr(address), expr(*value));
+		m_context.state().transfer(m_context.state().thisAddress(), expr(address), expr(*value));
 		break;
 	}
 	default:
 		m_errorReporter.warning(
+			4588_error,
 			_funCall.location(),
 			"Assertion checker does not yet implement this type of function call."
 		);
@@ -650,7 +679,6 @@ void SMTEncoder::initFunction(FunctionDefinition const& _function)
 {
 	solAssert(m_callStack.empty(), "");
 	solAssert(m_currentContract, "");
-	m_context.reset();
 	m_context.pushSolver();
 	m_pathConditions.clear();
 	pushCallStack({&_function, nullptr});
@@ -666,7 +694,6 @@ void SMTEncoder::visitAssert(FunctionCall const& _funCall)
 	auto const& args = _funCall.arguments();
 	solAssert(args.size() == 1, "");
 	solAssert(args.front()->annotation().type->category() == Type::Category::Bool, "");
-	addPathImpliedExpression(expr(*args.front()));
 }
 
 void SMTEncoder::visitRequire(FunctionCall const& _funCall)
@@ -693,7 +720,7 @@ void SMTEncoder::visitGasLeft(FunctionCall const& _funCall)
 
 void SMTEncoder::endVisit(Identifier const& _identifier)
 {
-	if (_identifier.annotation().lValueRequested)
+	if (_identifier.annotation().willBeWrittenTo)
 	{
 		// Will be translated as part of the node that requested the lvalue.
 	}
@@ -705,7 +732,7 @@ void SMTEncoder::endVisit(Identifier const& _identifier)
 		defineGlobalVariable(_identifier.name(), _identifier);
 	else if (_identifier.name() == "this")
 	{
-		defineExpr(_identifier, m_context.thisAddress());
+		defineExpr(_identifier, m_context.state().thisAddress());
 		m_uninterpretedTerms.insert(&_identifier);
 	}
 	else
@@ -754,6 +781,7 @@ void SMTEncoder::visitTypeConversion(FunctionCall const& _funCall)
 		}
 
 		m_errorReporter.warning(
+			5084_error,
 			_funCall.location(),
 			"Type conversion is not yet fully supported and might yield false positives."
 		);
@@ -783,6 +811,7 @@ void SMTEncoder::endVisit(Literal const& _literal)
 	else
 	{
 		m_errorReporter.warning(
+			7885_error,
 			_literal.location(),
 			"Assertion checker does not yet support the type of this literal (" +
 			_literal.annotation().type->toString() +
@@ -800,13 +829,15 @@ void SMTEncoder::endVisit(Return const& _return)
 		{
 			auto const& symbTuple = dynamic_pointer_cast<smt::SymbolicTupleVariable>(m_context.expression(*_return.expression()));
 			solAssert(symbTuple, "");
-			auto const& components = symbTuple->components();
-			solAssert(components.size() == returnParams.size(), "");
+			solAssert(symbTuple->components().size() == returnParams.size(), "");
+
+			auto const* tupleType = dynamic_cast<TupleType const*>(_return.expression()->annotation().type);
+			solAssert(tupleType, "");
+			auto const& types = tupleType->components();
+			solAssert(types.size() == returnParams.size(), "");
+
 			for (unsigned i = 0; i < returnParams.size(); ++i)
-			{
-				solAssert(components.at(i), "");
-				m_context.addAssertion(components.at(i)->currentValue(returnParams.at(i)->type()) == m_context.newValue(*returnParams.at(i)));
-			}
+				m_context.addAssertion(symbTuple->component(i, types.at(i), returnParams.at(i)->type()) == m_context.newValue(*returnParams.at(i)));
 		}
 		else if (returnParams.size() == 1)
 			m_context.addAssertion(expr(*_return.expression(), returnParams.front()->type()) == m_context.newValue(*returnParams.front()));
@@ -831,6 +862,7 @@ bool SMTEncoder::visit(MemberAccess const& _memberAccess)
 			accessedName = identifier->name();
 		else
 			m_errorReporter.warning(
+				9551_error,
 				_memberAccess.location(),
 				"Assertion checker does not yet support this expression."
 			);
@@ -852,14 +884,42 @@ bool SMTEncoder::visit(MemberAccess const& _memberAccess)
 		_memberAccess.expression().accept(*this);
 		if (_memberAccess.memberName() == "balance")
 		{
-			defineExpr(_memberAccess, m_context.balance(expr(_memberAccess.expression())));
+			defineExpr(_memberAccess, m_context.state().balance(expr(_memberAccess.expression())));
 			setSymbolicUnknownValue(*m_context.expression(_memberAccess), m_context);
 			m_uninterpretedTerms.insert(&_memberAccess);
 			return false;
 		}
 	}
+	else if (exprType->category() == Type::Category::Array)
+	{
+		_memberAccess.expression().accept(*this);
+		if (_memberAccess.memberName() == "length")
+		{
+			auto symbArray = dynamic_pointer_cast<smt::SymbolicArrayVariable>(m_context.expression(_memberAccess.expression()));
+			solAssert(symbArray, "");
+			defineExpr(_memberAccess, symbArray->length());
+			m_uninterpretedTerms.insert(&_memberAccess);
+			setSymbolicUnknownValue(
+				expr(_memberAccess),
+				_memberAccess.annotation().type,
+				m_context
+			);
+		}
+		else
+		{
+			auto const& name = _memberAccess.memberName();
+			solAssert(name == "push" || name == "pop", "");
+			m_errorReporter.warning(
+				9098_error,
+				_memberAccess.location(),
+				"Assertion checker does not yet support array member \"" + name + "\"."
+			);
+		}
+		return false;
+	}
 	else
 		m_errorReporter.warning(
+			7650_error,
 			_memberAccess.location(),
 			"Assertion checker does not yet support this expression."
 		);
@@ -884,6 +944,7 @@ void SMTEncoder::endVisit(IndexAccess const& _indexAccess)
 		if (varDecl->type()->category() == Type::Category::FixedBytes)
 		{
 			m_errorReporter.warning(
+				7989_error,
 				_indexAccess.location(),
 				"Assertion checker does not yet support index accessing fixed bytes."
 			);
@@ -898,15 +959,17 @@ void SMTEncoder::endVisit(IndexAccess const& _indexAccess)
 	else
 	{
 		m_errorReporter.warning(
+			9118_error,
 			_indexAccess.location(),
 			"Assertion checker does not yet implement this expression."
 		);
 		return;
 	}
 
-	solAssert(array, "");
+	auto arrayVar = dynamic_pointer_cast<smt::SymbolicArrayVariable>(array);
+	solAssert(arrayVar, "");
 	defineExpr(_indexAccess, smt::Expression::select(
-		array->currentValue(),
+		arrayVar->elements(),
 		expr(*_indexAccess.indexExpression())
 	));
 	setSymbolicUnknownValue(
@@ -921,6 +984,7 @@ void SMTEncoder::endVisit(IndexRangeAccess const& _indexRangeAccess)
 {
 	createExpr(_indexRangeAccess);
 	m_errorReporter.warning(
+		2923_error,
 		_indexRangeAccess.location(),
 		"Assertion checker does not yet implement this expression."
 	);
@@ -977,16 +1041,20 @@ void SMTEncoder::arrayIndexAssignment(Expression const& _expr, smt::Expression c
 					return false;
 				});
 
+			auto symbArray = dynamic_pointer_cast<smt::SymbolicArrayVariable>(m_context.variable(*varDecl));
 			smt::Expression store = smt::Expression::store(
-				m_context.variable(*varDecl)->currentValue(),
+				symbArray->elements(),
 				expr(*indexAccess->indexExpression()),
 				toStore
 			);
-			m_context.addAssertion(m_context.newValue(*varDecl) == store);
+			auto oldLength = symbArray->length();
+			symbArray->increaseIndex();
+			m_context.addAssertion(symbArray->elements() == store);
+			m_context.addAssertion(symbArray->length() == oldLength);
 			// Update the SMT select value after the assignment,
 			// necessary for sound models.
 			defineExpr(*indexAccess, smt::Expression::select(
-				m_context.variable(*varDecl)->currentValue(),
+				symbArray->elements(),
 				expr(*indexAccess->indexExpression())
 			));
 
@@ -994,12 +1062,18 @@ void SMTEncoder::arrayIndexAssignment(Expression const& _expr, smt::Expression c
 		}
 		else if (auto base = dynamic_cast<IndexAccess const*>(&indexAccess->baseExpression()))
 		{
-			toStore = smt::Expression::store(expr(*base), expr(*indexAccess->indexExpression()), toStore);
+			auto symbArray = dynamic_pointer_cast<smt::SymbolicArrayVariable>(m_context.expression(*base));
+			solAssert(symbArray, "");
+			toStore = smt::Expression::tuple_constructor(
+				smt::Expression(base->annotation().type),
+				{smt::Expression::store(symbArray->elements(), expr(*indexAccess->indexExpression()), toStore), symbArray->length()}
+			);
 			indexAccess = base;
 		}
 		else
 		{
 			m_errorReporter.warning(
+				9056_error,
 				_expr.location(),
 				"Assertion checker does not yet implement this expression."
 			);
@@ -1015,6 +1089,7 @@ void SMTEncoder::defineGlobalVariable(string const& _name, Expression const& _ex
 		bool abstract = m_context.createGlobalSymbol(_name, _expr);
 		if (abstract)
 			m_errorReporter.warning(
+				1695_error,
 				_expr.location(),
 				"Assertion checker does not yet support this global variable."
 			);
@@ -1068,6 +1143,7 @@ void SMTEncoder::arithmeticOperation(BinaryOperation const& _op)
 		}
 		default:
 			m_errorReporter.warning(
+				5188_error,
 				_op.location(),
 				"Assertion checker does not yet implement this operator."
 			);
@@ -1075,6 +1151,7 @@ void SMTEncoder::arithmeticOperation(BinaryOperation const& _op)
 	}
 	else
 		m_errorReporter.warning(
+			9011_error,
 			_op.location(),
 			"Assertion checker does not yet implement this operator for type " + type->richIdentifier() + "."
 		);
@@ -1166,6 +1243,7 @@ void SMTEncoder::compareOperation(BinaryOperation const& _op)
 	}
 	else
 		m_errorReporter.warning(
+			7229_error,
 			_op.location(),
 			"Assertion checker does not yet implement the type " + _op.annotation().commonType->toString() + " for comparisons"
 		);
@@ -1194,6 +1272,7 @@ void SMTEncoder::booleanOperation(BinaryOperation const& _op)
 	}
 	else
 		m_errorReporter.warning(
+			3263_error,
 			_op.location(),
 			"Assertion checker does not yet implement the type " + _op.annotation().commonType->toString() + " for boolean operations"
 		);
@@ -1226,6 +1305,7 @@ void SMTEncoder::assignment(
 			m_context.newValue(*varDecl);
 
 		m_errorReporter.warning(
+			6191_error,
 			_location,
 			"Assertion checker does not yet implement type " + _type->toString()
 		);
@@ -1253,6 +1333,7 @@ void SMTEncoder::assignment(
 	}
 	else
 		m_errorReporter.warning(
+			8182_error,
 			_location,
 			"Assertion checker does not yet implement such assignments."
 		);
@@ -1282,7 +1363,14 @@ smt::Expression SMTEncoder::compoundAssignment(Assignment const& _assignment)
 
 void SMTEncoder::assignment(VariableDeclaration const& _variable, Expression const& _value)
 {
-	assignment(_variable, expr(_value, _variable.type()));
+	// In general, at this point, the SMT sorts of _variable and _value are the same,
+	// even if there is implicit conversion.
+	// This is a special case where the SMT sorts are different.
+	// For now we are unaware of other cases where this happens, but if they do appear
+	// we should extract this into an `implicitConversion` function.
+	if (_variable.type()->category() != Type::Category::Array || _value.annotation().type->category() != Type::Category::StringLiteral)
+		assignment(_variable, expr(_value, _variable.type()));
+	// TODO else { store each string literal byte into the array }
 }
 
 void SMTEncoder::assignment(VariableDeclaration const& _variable, smt::Expression const& _value)
@@ -1463,6 +1551,7 @@ bool SMTEncoder::createVariable(VariableDeclaration const& _varDecl)
 	if (abstract)
 	{
 		m_errorReporter.warning(
+			8115_error,
 			_varDecl.location(),
 			"Assertion checker does not yet support the type of this variable."
 		);
@@ -1475,7 +1564,7 @@ smt::Expression SMTEncoder::expr(Expression const& _e, TypePointer _targetType)
 {
 	if (!m_context.knownExpression(_e))
 	{
-		m_errorReporter.warning(_e.location(), "Internal error: Expression undefined for SMT solver." );
+		m_errorReporter.warning(6031_error, _e.location(), "Internal error: Expression undefined for SMT solver." );
 		createExpr(_e);
 	}
 
@@ -1487,6 +1576,7 @@ void SMTEncoder::createExpr(Expression const& _e)
 	bool abstract = m_context.createExpression(_e);
 	if (abstract)
 		m_errorReporter.warning(
+			8364_error,
 			_e.location(),
 			"Assertion checker does not yet implement type " + _e.annotation().type->toString()
 		);
@@ -1570,7 +1660,7 @@ SMTEncoder::VariableIndices SMTEncoder::copyVariableIndices()
 void SMTEncoder::resetVariableIndices(VariableIndices const& _indices)
 {
 	for (auto const& var: _indices)
-		m_context.variable(*var.first)->index() = var.second;
+		m_context.variable(*var.first)->setIndex(var.second);
 }
 
 void SMTEncoder::clearIndices(ContractDefinition const* _contract, FunctionDefinition const* _function)
@@ -1669,14 +1759,10 @@ void SMTEncoder::createReturnedExpressions(FunctionCall const& _funCall)
 		solAssert(symbComponents.size() == returnParams.size(), "");
 		for (unsigned i = 0; i < symbComponents.size(); ++i)
 		{
-			auto sComponent = symbComponents.at(i);
 			auto param = returnParams.at(i);
 			solAssert(param, "");
-			if (sComponent)
-			{
-				solAssert(m_context.knownVariable(*param), "");
-				m_context.addAssertion(sComponent->currentValue() == currentValue(*param));
-			}
+			solAssert(m_context.knownVariable(*param), "");
+			m_context.addAssertion(symbTuple->component(i) == currentValue(*param));
 		}
 	}
 	else if (returnParams.size() == 1)

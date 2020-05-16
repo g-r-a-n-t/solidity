@@ -255,14 +255,14 @@ vector<YulString> AsmAnalyzer::operator()(FunctionCall const& _funCall)
 	yulAssert(!_funCall.functionName.name.empty(), "");
 	vector<YulString> const* parameterTypes = nullptr;
 	vector<YulString> const* returnTypes = nullptr;
-	bool needsLiteralArguments = false;
+	vector<bool> const* needsLiteralArguments = nullptr;
 
 	if (BuiltinFunction const* f = m_dialect.builtin(_funCall.functionName.name))
 	{
 		parameterTypes = &f->parameters;
 		returnTypes = &f->returns;
 		if (f->literalArguments)
-			needsLiteralArguments = true;
+			needsLiteralArguments = &f->literalArguments.value();
 	}
 	else if (!m_currentScope->lookup(_funCall.functionName.name, GenericVisitor{
 		[&](Scope::Variable const&)
@@ -293,22 +293,28 @@ vector<YulString> AsmAnalyzer::operator()(FunctionCall const& _funCall)
 		);
 
 	vector<YulString> argTypes;
-	for (auto const& arg: _funCall.arguments | boost::adaptors::reversed)
+	for (size_t i = _funCall.arguments.size(); i > 0; i--)
 	{
+		Expression const& arg = _funCall.arguments[i - 1];
+
 		argTypes.emplace_back(expectExpression(arg));
 
-		if (needsLiteralArguments)
+		if (needsLiteralArguments && (*needsLiteralArguments)[i - 1])
 		{
 			if (!holds_alternative<Literal>(arg))
 				typeError(
 					_funCall.functionName.location,
 					"Function expects direct literals as arguments."
 				);
-			else if (!m_dataNames.count(std::get<Literal>(arg).value))
-				typeError(
-					_funCall.functionName.location,
-					"Unknown data object \"" + std::get<Literal>(arg).value.str() + "\"."
-				);
+			else if (
+				_funCall.functionName.name.str() == "datasize" ||
+				_funCall.functionName.name.str() == "dataoffset"
+			)
+				if (!m_dataNames.count(std::get<Literal>(arg).value))
+					typeError(
+						_funCall.functionName.location,
+						"Unknown data object \"" + std::get<Literal>(arg).value.str() + "\"."
+					);
 		}
 	}
 	std::reverse(argTypes.begin(), argTypes.end());
@@ -521,7 +527,7 @@ bool AsmAnalyzer::warnOnInstructions(evmasm::Instruction _instr, SourceLocation 
 	// Similarly we assume bitwise shifting and create2 go together.
 	yulAssert(m_evmVersion.hasBitwiseShifting() == m_evmVersion.hasCreate2(), "");
 
-	auto errorForVM = [=](string const& vmKindMessage) {
+	auto errorForVM = [&](string const& vmKindMessage) {
 		typeError(
 			_location,
 			"The \"" +
@@ -577,6 +583,7 @@ bool AsmAnalyzer::warnOnInstructions(evmasm::Instruction _instr, SourceLocation 
 	)
 	{
 		m_errorReporter.error(
+			4316_error,
 			Error::Type::SyntaxError,
 			_location,
 			"Jump instructions and labels are low-level EVM features that can lead to "
@@ -593,13 +600,13 @@ bool AsmAnalyzer::warnOnInstructions(evmasm::Instruction _instr, SourceLocation 
 
 void AsmAnalyzer::typeError(SourceLocation const& _location, string const& _description)
 {
-	m_errorReporter.typeError(_location, _description);
+	m_errorReporter.typeError(7569_error, _location, _description);
 	m_success = false;
 }
 
 void AsmAnalyzer::declarationError(SourceLocation const& _location, string const& _description)
 {
-	m_errorReporter.declarationError(_location, _description);
+	m_errorReporter.declarationError(9595_error, _location, _description);
 	m_success = false;
 }
 

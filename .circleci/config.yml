@@ -10,12 +10,12 @@ parameters:
   ubuntu-1804-docker-image-rev:
     type: string
     default: "4"
-  ubuntu-1904-docker-image-rev:
+  ubuntu-2004-docker-image-rev:
     type: string
-    default: "4"
-  ubuntu-1904-clang-docker-image-rev:
+    default: "2"
+  ubuntu-2004-clang-docker-image-rev:
     type: string
-    default: "5"
+    default: "2"
   ubuntu-1604-clang-ossfuzz-docker-image-rev:
     type: string
     default: "2"
@@ -50,6 +50,7 @@ defaults:
         cd build
         protoc --proto_path=../test/tools/ossfuzz yulProto.proto --cpp_out=../test/tools/ossfuzz
         protoc --proto_path=../test/tools/ossfuzz abiV2Proto.proto --cpp_out=../test/tools/ossfuzz
+        protoc --proto_path=../test/tools/ossfuzz solProto.proto --cpp_out=../test/tools/ossfuzz
         cmake .. -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE:-Release} $CMAKE_OPTIONS
         make ossfuzz ossfuzz_proto ossfuzz_abiv2 -j4
 
@@ -97,6 +98,7 @@ defaults:
         - test/tools/ossfuzz/strictasm_opt_ossfuzz
         - test/tools/ossfuzz/yul_proto_diff_ossfuzz
         - test/tools/ossfuzz/yul_proto_ossfuzz
+        - test/tools/ossfuzz/sol_proto_ossfuzz
 
   # test result output directory
   - artifacts_test_results: &artifacts_test_results
@@ -122,6 +124,10 @@ defaults:
       name: command line tests
       command: ./test/cmdlineTests.sh
 
+  - run_docs_pragma_min_version: &run_docs_pragma_min_version
+      name: docs pragma version check
+      command: ./scripts/docs_version_pragma_check.sh
+
   - test_ubuntu1604_clang: &test_ubuntu1604_clang
       docker:
         - image: ethereum/solidity-buildpack-deps:ubuntu1604-clang-ossfuzz-<< pipeline.parameters.ubuntu-1604-clang-ossfuzz-docker-image-rev >>
@@ -133,9 +139,9 @@ defaults:
         - store_test_results: *store_test_results
         - store_artifacts: *artifacts_test_results
 
-  - test_ubuntu1904_clang: &test_ubuntu1904_clang
+  - test_ubuntu2004_clang: &test_ubuntu2004_clang
       docker:
-        - image: ethereum/solidity-buildpack-deps:ubuntu1904-clang-<< pipeline.parameters.ubuntu-1904-clang-docker-image-rev >>
+        - image: ethereum/solidity-buildpack-deps:ubuntu2004-clang-<< pipeline.parameters.ubuntu-2004-clang-docker-image-rev >>
       steps:
         - checkout
         - attach_workspace:
@@ -144,9 +150,9 @@ defaults:
         - store_test_results: *store_test_results
         - store_artifacts: *artifacts_test_results
 
-  - test_ubuntu1904: &test_ubuntu1904
+  - test_ubuntu2004: &test_ubuntu2004
       docker:
-        - image: ethereum/solidity-buildpack-deps:ubuntu1904-<< pipeline.parameters.ubuntu-1904-docker-image-rev >>
+        - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
       steps:
         - checkout
         - attach_workspace:
@@ -156,7 +162,7 @@ defaults:
         - store_artifacts: *artifacts_test_results
 
   - test_asan: &test_asan
-      <<: *test_ubuntu1904
+      <<: *test_ubuntu2004
       steps:
       - checkout
       - attach_workspace:
@@ -175,7 +181,7 @@ defaults:
         tags:
           only: /.*/
 
-  - workflow_ubuntu1904: &workflow_ubuntu1904
+  - workflow_ubuntu2004: &workflow_ubuntu2004
       <<: *workflow_trigger_on_tags
       requires:
         - b_ubu
@@ -185,17 +191,17 @@ defaults:
       requires:
         - b_ubu_ossfuzz
 
-  - workflow_ubuntu1904_clang: &workflow_ubuntu1904_clang
+  - workflow_ubuntu2004_clang: &workflow_ubuntu2004_clang
       <<: *workflow_trigger_on_tags
       requires:
         - b_ubu_clang
 
-  - workflow_ubuntu1904_release: &workflow_ubuntu1904_release
+  - workflow_ubuntu2004_release: &workflow_ubuntu2004_release
       <<: *workflow_trigger_on_tags
       requires:
         - b_ubu_release
 
-  - workflow_ubuntu1904_codecov: &workflow_ubuntu1904_codecov
+  - workflow_ubuntu2004_codecov: &workflow_ubuntu2004_codecov
       <<: *workflow_trigger_on_tags
       requires:
         - b_ubu_codecov
@@ -205,7 +211,7 @@ defaults:
       requires:
         - b_osx
 
-  - workflow_ubuntu1904_asan: &workflow_ubuntu1904_asan
+  - workflow_ubuntu2004_asan: &workflow_ubuntu2004_asan
       <<: *workflow_trigger_on_tags
       requires:
         - b_ubu_asan
@@ -280,12 +286,18 @@ jobs:
 
   chk_coding_style:
     docker:
-      - image: buildpack-deps:disco
+      - image: buildpack-deps:focal
     steps:
       - checkout
       - run:
+          name: Install shellcheck
+          command: apt -q update && apt install -y shellcheck
+      - run:
           name: Check for C++ coding style
           command: ./scripts/check_style.sh
+      - run:
+          name: checking shell scripts
+          command: ./scripts/chk_shellscripts/chk_shellscripts.sh
 
   chk_pylint:
     docker:
@@ -302,6 +314,18 @@ jobs:
       - run:
           name: Linting Python Scripts
           command: ./scripts/pylint_all.py
+
+  chk_antlr_grammar:
+    docker:
+      - image: buildpack-deps:eoan
+    steps:
+      - checkout
+      - run:
+          name: Install Java
+          command: apt -q update && apt install -y openjdk-14-jdk
+      - run:
+          name: Run tests
+          command: ./scripts/test_antlr_grammar.sh
 
   chk_buglist:
     docker:
@@ -322,7 +346,7 @@ jobs:
 
   chk_proofs:
     docker:
-      - image: buildpack-deps:disco
+      - image: buildpack-deps:latest
     environment:
       TERM: xterm
     steps:
@@ -331,13 +355,22 @@ jobs:
           name: Z3 python deps
           command: |
             apt-get -qq update
-            apt-get -qy install python-pip
-            pip install --user z3-solver
+            apt-get -qy install python3-pip
+            pip3 install --user z3-solver
       - run: *run_proofs
 
-  b_ubu_clang: &build_ubuntu1904_clang
+  chk_docs_pragma_min_version:
     docker:
-      - image: ethereum/solidity-buildpack-deps:ubuntu1904-clang-<< pipeline.parameters.ubuntu-1904-clang-docker-image-rev >>
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
+    environment:
+      TERM: xterm
+    steps:
+      - checkout
+      - run: *run_docs_pragma_min_version
+
+  b_ubu_clang: &build_ubuntu2004_clang
+    docker:
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-clang-<< pipeline.parameters.ubuntu-2004-clang-docker-image-rev >>
     environment:
       CC: clang
       CXX: clang++
@@ -347,9 +380,9 @@ jobs:
       - store_artifacts: *artifacts_solc
       - persist_to_workspace: *artifacts_executables
 
-  b_ubu: &build_ubuntu1904
+  b_ubu: &build_ubuntu2004
     docker:
-      - image: ethereum/solidity-buildpack-deps:ubuntu1904-<< pipeline.parameters.ubuntu-1904-docker-image-rev >>
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
     steps:
       - checkout
       - run: *run_build
@@ -357,8 +390,8 @@ jobs:
       - store_artifacts: *artifacts_tools
       - persist_to_workspace: *artifacts_executables
 
-  b_ubu_release: &build_ubuntu1904_release
-    <<: *build_ubuntu1904
+  b_ubu_release: &build_ubuntu2004_release
+    <<: *build_ubuntu2004
     environment:
       FORCE_RELEASE: ON
 
@@ -375,7 +408,7 @@ jobs:
       - persist_to_workspace: *artifacts_executables
 
   b_ubu_codecov:
-    <<: *build_ubuntu1904
+    <<: *build_ubuntu2004
     environment:
       COVERAGE: ON
       CMAKE_BUILD_TYPE: Debug
@@ -385,7 +418,7 @@ jobs:
       - persist_to_workspace: *artifacts_build_dir
 
   t_ubu_codecov:
-    <<: *test_ubuntu1904
+    <<: *test_ubuntu2004
     environment:
       EVM: constantinople
       OPTIMIZE: 1
@@ -408,7 +441,7 @@ jobs:
   # Builds in C++20 mode and uses debug build in order to speed up.
   # Do *NOT* store any artifacts or workspace as we don't run tests on this build.
   b_ubu_cxx20:
-    <<: *build_ubuntu1904
+    <<: *build_ubuntu2004
     environment:
       CMAKE_BUILD_TYPE: Debug
       CMAKE_OPTIONS: -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/cxx20.cmake -DUSE_CVC4=OFF
@@ -525,27 +558,15 @@ jobs:
 
   b_ems:
     docker:
-      - image: trzeci/emscripten:sdk-tag-1.39.3-64bit
+      - image: ethereum/solidity-buildpack-deps:emsdk-1.39.15-1
     environment:
       TERM: xterm
     steps:
       - checkout
-      - restore_cache:
-          name: Restore Boost build
-          key: &boost-cache-key emscripten-boost-{{ checksum "scripts/travis-emscripten/install_deps.sh" }}{{ checksum "scripts/build_emscripten.sh" }}{{ checksum "scripts/travis-emscripten/build_emscripten.sh" }}
-      - run:
-          name: Bootstrap Boost
-          command: |
-            scripts/travis-emscripten/install_deps.sh
       - run:
           name: Build
           command: |
             scripts/travis-emscripten/build_emscripten.sh
-      - save_cache:
-          name: Save Boost build
-          key: *boost-cache-key
-          paths:
-            - boost_1_70_0_install
       - store_artifacts:
           path: emscripten_build/libsolc/soljson.js
           destination: soljson.js
@@ -560,7 +581,7 @@ jobs:
 
   # x64 ASAN build, for testing for memory related bugs
   b_ubu_asan: &b_ubu_asan
-    <<: *build_ubuntu1904
+    <<: *build_ubuntu2004
     environment:
       CMAKE_OPTIONS: -DSANITIZE=address
       CMAKE_BUILD_TYPE: Release
@@ -572,7 +593,7 @@ jobs:
 
   b_docs:
     docker:
-      - image: ethereum/solidity-buildpack-deps:ubuntu1904-<< pipeline.parameters.ubuntu-1904-docker-image-rev >>
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
     steps:
       - checkout
       - run: *setup_prerelease_commit_hash
@@ -584,10 +605,27 @@ jobs:
           destination: docs-html
 
   t_ubu_soltest: &t_ubu_soltest
-    <<: *test_ubuntu1904
+    <<: *test_ubuntu2004
+
+  t_ubu_soltest_enforce_yul: &t_ubu_soltest_enforce_yul
+    docker:
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
+    environment:
+      EVM: constantinople
+      SOLTEST_FLAGS: --enforce-via-yul
+      OPTIMIZE: 0
+      TERM: xterm
+    steps:
+      - checkout
+      - attach_workspace:
+          at: build
+      - run: *run_soltest
+      - store_test_results: *store_test_results
+      - store_artifacts: *artifacts_test_results
+
 
   t_ubu_clang_soltest: &t_ubu_clang_soltest
-    <<: *test_ubuntu1904_clang
+    <<: *test_ubuntu2004_clang
     environment:
       EVM: constantinople
       OPTIMIZE: 0
@@ -597,7 +635,7 @@ jobs:
 
   t_ubu_cli: &t_ubu_cli
     docker:
-      - image: ethereum/solidity-buildpack-deps:ubuntu1904-<< pipeline.parameters.ubuntu-1904-docker-image-rev >>
+      - image: ethereum/solidity-buildpack-deps:ubuntu2004-<< pipeline.parameters.ubuntu-2004-docker-image-rev >>
     environment:
       TERM: xterm
     steps:
@@ -636,7 +674,7 @@ jobs:
 
   t_ems_solcjs:
     docker:
-      - image: ethereum/solidity-buildpack-deps:ubuntu1904
+      - image: buildpack-deps:latest
     environment:
       TERM: xterm
     steps:
@@ -768,6 +806,8 @@ workflows:
       - chk_buglist: *workflow_trigger_on_tags
       - chk_proofs: *workflow_trigger_on_tags
       - chk_pylint: *workflow_trigger_on_tags
+      - chk_antlr_grammar: *workflow_trigger_on_tags
+      - chk_docs_pragma_min_version: *workflow_trigger_on_tags
 
       # build-only
       - b_docs: *workflow_trigger_on_tags
@@ -783,20 +823,21 @@ workflows:
       # Ubuntu build and tests
       - b_ubu: *workflow_trigger_on_tags
       - b_ubu18: *workflow_trigger_on_tags
-      - t_ubu_cli: *workflow_ubuntu1904
-      - t_ubu_soltest: *workflow_ubuntu1904
+      - t_ubu_cli: *workflow_ubuntu2004
+      - t_ubu_soltest: *workflow_ubuntu2004
+      - t_ubu_soltest_enforce_yul: *workflow_ubuntu2004
       - b_ubu_clang: *workflow_trigger_on_tags
-      - t_ubu_clang_soltest: *workflow_ubuntu1904_clang
+      - t_ubu_clang_soltest: *workflow_ubuntu2004_clang
 
       # Ubuntu fake release build and tests
       - b_ubu_release: *workflow_trigger_on_tags
-      - t_ubu_release_cli: *workflow_ubuntu1904_release
-      - t_ubu_release_soltest: *workflow_ubuntu1904_release
+      - t_ubu_release_cli: *workflow_ubuntu2004_release
+      - t_ubu_release_soltest: *workflow_ubuntu2004_release
 
       # ASan build and tests
       - b_ubu_asan: *workflow_trigger_on_tags
-      - t_ubu_asan_constantinople: *workflow_ubuntu1904_asan
-      - t_ubu_asan_cli: *workflow_ubuntu1904_asan
+      - t_ubu_asan_constantinople: *workflow_ubuntu2004_asan
+      - t_ubu_asan_cli: *workflow_ubuntu2004_asan
 
       # Emscripten build and selected tests
       - b_ems: *workflow_trigger_on_tags
@@ -823,4 +864,4 @@ workflows:
 
       # Code Coverage enabled build and tests
       - b_ubu_codecov: *workflow_trigger_on_tags
-      - t_ubu_codecov: *workflow_ubuntu1904_codecov
+      - t_ubu_codecov: *workflow_ubuntu2004_codecov

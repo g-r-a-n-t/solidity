@@ -27,6 +27,7 @@
 #include <libsolidity/analysis/ControlFlowAnalyzer.h>
 #include <libsolidity/analysis/ControlFlowGraph.h>
 #include <libsolidity/analysis/ContractLevelChecker.h>
+#include <libsolidity/analysis/DeclarationTypeChecker.h>
 #include <libsolidity/analysis/DocStringAnalyser.h>
 #include <libsolidity/analysis/GlobalContext.h>
 #include <libsolidity/analysis/NameAndTypeResolver.h>
@@ -35,6 +36,7 @@
 #include <libsolidity/analysis/SyntaxChecker.h>
 #include <libsolidity/analysis/TypeChecker.h>
 #include <libsolidity/analysis/ViewPureChecker.h>
+#include <libsolidity/analysis/ImmutableValidator.h>
 
 #include <libsolidity/ast/AST.h>
 #include <libsolidity/ast/TypeProvider.h>
@@ -65,7 +67,8 @@
 
 #include <json/json.h>
 
-#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/replace.hpp>
+#include <utility>
 
 using namespace std;
 using namespace solidity;
@@ -77,8 +80,8 @@ using solidity::util::toHex;
 
 static int g_compilerStackCounts = 0;
 
-CompilerStack::CompilerStack(ReadCallback::Callback const& _readFile):
-	m_readFile{_readFile},
+CompilerStack::CompilerStack(ReadCallback::Callback _readFile):
+	m_readFile{std::move(_readFile)},
 	m_enabledSMTSolvers{smt::SMTSolverChoice::All()},
 	m_generateIR{false},
 	m_generateEwasm{false},
@@ -211,7 +214,6 @@ void CompilerStack::reset(bool _keepSettings)
 		m_metadataHash = MetadataHash::IPFS;
 	}
 	m_globalContext.reset();
-	m_scopes.clear();
 	m_sourceOrder.clear();
 	m_contracts.clear();
 	m_errorReporter.clear();
@@ -236,7 +238,7 @@ bool CompilerStack::parse()
 	m_errorReporter.clear();
 
 	if (SemVerVersion{string(VersionString)}.isPrerelease())
-		m_errorReporter.warning("This is a pre-release compiler version, please do not use it in production.");
+		m_errorReporter.warning(3805_error, "This is a pre-release compiler version, please do not use it in production.");
 
 	Parser parser{m_errorReporter, m_evmVersion, m_parserErrorRecovery};
 
@@ -311,7 +313,8 @@ bool CompilerStack::analyze()
 				noErrors = false;
 
 		m_globalContext = make_shared<GlobalContext>();
-		NameAndTypeResolver resolver(*m_globalContext, m_evmVersion, m_scopes, m_errorReporter);
+		// We need to keep the same resolver during the whole process.
+		NameAndTypeResolver resolver(*m_globalContext, m_evmVersion, m_errorReporter);
 		for (Source const* source: m_sourceOrder)
 			if (source->ast && !resolver.registerDeclarations(*source->ast))
 				return false;
@@ -346,6 +349,11 @@ bool CompilerStack::analyze()
 					}
 
 				}
+
+		DeclarationTypeChecker declarationTypeChecker(m_errorReporter, m_evmVersion);
+		for (Source const* source: m_sourceOrder)
+			if (source->ast && !declarationTypeChecker.check(*source->ast))
+				return false;
 
 		// Next, we check inheritance, overrides, function collisions and other things at
 		// contract or function level.
@@ -382,6 +390,15 @@ bool CompilerStack::analyze()
 				if (source->ast && !postTypeChecker.check(*source->ast))
 					noErrors = false;
 		}
+
+		// Check that immutable variables are never read in c'tors and assigned
+		// exactly once
+		if (noErrors)
+			for (Source const* source: m_sourceOrder)
+				if (source->ast)
+					for (ASTPointer<ASTNode> const& node: source->ast->nodes())
+						if (ContractDefinition* contract = dynamic_cast<ContractDefinition*>(node.get()))
+							ImmutableValidator(m_errorReporter, *contract).analyze();
 
 		if (noErrors)
 		{
@@ -716,11 +733,7 @@ Json::Value const& CompilerStack::contractABI(Contract const& _contract) const
 
 	solAssert(_contract.contract, "");
 
-	// caches the result
-	if (!_contract.abi)
-		_contract.abi = make_unique<Json::Value>(ABI::generate(*_contract.contract));
-
-	return *_contract.abi;
+	return _contract.abi.init([&]{ return ABI::generate(*_contract.contract); });
 }
 
 Json::Value const& CompilerStack::storageLayout(string const& _contractName) const
@@ -738,11 +751,7 @@ Json::Value const& CompilerStack::storageLayout(Contract const& _contract) const
 
 	solAssert(_contract.contract, "");
 
-	// caches the result
-	if (!_contract.storageLayout)
-		_contract.storageLayout = make_unique<Json::Value>(StorageLayout().generate(*_contract.contract));
-
-	return *_contract.storageLayout;
+	return _contract.storageLayout.init([&]{ return StorageLayout().generate(*_contract.contract); });
 }
 
 Json::Value const& CompilerStack::natspecUser(string const& _contractName) const
@@ -760,11 +769,7 @@ Json::Value const& CompilerStack::natspecUser(Contract const& _contract) const
 
 	solAssert(_contract.contract, "");
 
-	// caches the result
-	if (!_contract.userDocumentation)
-		_contract.userDocumentation = make_unique<Json::Value>(Natspec::userDocumentation(*_contract.contract));
-
-	return *_contract.userDocumentation;
+	return _contract.userDocumentation.init([&]{ return Natspec::userDocumentation(*_contract.contract); });
 }
 
 Json::Value const& CompilerStack::natspecDev(string const& _contractName) const
@@ -782,11 +787,7 @@ Json::Value const& CompilerStack::natspecDev(Contract const& _contract) const
 
 	solAssert(_contract.contract, "");
 
-	// caches the result
-	if (!_contract.devDocumentation)
-		_contract.devDocumentation = make_unique<Json::Value>(Natspec::devDocumentation(*_contract.contract));
-
-	return *_contract.devDocumentation;
+	return _contract.devDocumentation.init([&]{ return Natspec::devDocumentation(*_contract.contract); });
 }
 
 Json::Value CompilerStack::methodIdentifiers(string const& _contractName) const
@@ -815,11 +816,7 @@ string const& CompilerStack::metadata(Contract const& _contract) const
 
 	solAssert(_contract.contract, "");
 
-	// cache the result
-	if (!_contract.metadata)
-		_contract.metadata = make_unique<string>(createMetadata(_contract));
-
-	return *_contract.metadata;
+	return _contract.metadata.init([&]{ return createMetadata(_contract); });
 }
 
 Scanner const& CompilerStack::scanner(string const& _sourceName) const
@@ -899,8 +896,7 @@ h256 const& CompilerStack::Source::swarmHash() const
 string const& CompilerStack::Source::ipfsUrl() const
 {
 	if (ipfsUrlCached.empty())
-		if (scanner->source().size() < 1024 * 256)
-			ipfsUrlCached = "dweb:/ipfs/" + util::ipfsHashBase58(scanner->source());
+		ipfsUrlCached = "dweb:/ipfs/" + util::ipfsHashBase58(scanner->source());
 	return ipfsUrlCached;
 }
 
@@ -933,6 +929,7 @@ StringMap CompilerStack::loadMissingSources(SourceUnit const& _ast, std::string 
 				else
 				{
 					m_errorReporter.parserError(
+						6275_error,
 						import->location(),
 						string("Source \"" + importPath + "\" not found: " + result.responseOrErrorMessage)
 					);
@@ -1094,6 +1091,7 @@ void CompilerStack::compileContract(
 		compiledContract.runtimeObject.bytecode.size() > 0x6000
 	)
 		m_errorReporter.warning(
+			5574_error,
 			_contract.location(),
 			"Contract code size exceeds 24576 bytes (a limit introduced in Spurious Dragon). "
 			"This contract may not be deployable on mainnet. "
@@ -1113,15 +1111,21 @@ void CompilerStack::generateIR(ContractDefinition const& _contract)
 	if (!_contract.canBeDeployed())
 		return;
 
+	map<ContractDefinition const*, string const> otherYulSources;
+
 	Contract& compiledContract = m_contracts.at(_contract.fullyQualifiedName());
 	if (!compiledContract.yulIR.empty())
 		return;
 
+	string dependenciesSource;
 	for (auto const* dependency: _contract.annotation().contractDependencies)
+	{
 		generateIR(*dependency);
+		otherYulSources.emplace(dependency, m_contracts.at(dependency->fullyQualifiedName()).yulIR);
+	}
 
 	IRGenerator generator(m_evmVersion, m_revertStrings, m_optimiserSettings);
-	tie(compiledContract.yulIR, compiledContract.yulIROptimized) = generator.run(_contract);
+	tie(compiledContract.yulIR, compiledContract.yulIROptimized) = generator.run(_contract, otherYulSources);
 }
 
 void CompilerStack::generateEwasm(ContractDefinition const& _contract)
@@ -1212,6 +1216,8 @@ string CompilerStack::createMetadata(Contract const& _contract) const
 
 		solAssert(s.second.scanner, "Scanner not available");
 		meta["sources"][s.first]["keccak256"] = "0x" + toHex(s.second.keccak256().asBytes());
+		if (optional<string> licenseString = s.second.ast->licenseString())
+			meta["sources"][s.first]["license"] = *licenseString;
 		if (m_metadataLiteralSources)
 			meta["sources"][s.first]["content"] = s.second.scanner->source();
 		else
@@ -1249,6 +1255,7 @@ string CompilerStack::createMetadata(Contract const& _contract) const
 		{
 			details["yulDetails"] = Json::objectValue;
 			details["yulDetails"]["stackAllocation"] = m_optimiserSettings.optimizeStackAllocation;
+			details["yulDetails"]["optimizerSteps"] = m_optimiserSettings.yulOptimiserSteps;
 		}
 
 		meta["settings"]["optimizer"]["details"] = std::move(details);
@@ -1373,10 +1380,7 @@ bytes CompilerStack::createCBORMetadata(string const& _metadata, bool _experimen
 	MetadataCBOREncoder encoder;
 
 	if (m_metadataHash == MetadataHash::IPFS)
-	{
-		solAssert(_metadata.length() < 1024 * 256, "Metadata too large.");
 		encoder.pushBytes("ipfs", util::ipfsHash(_metadata));
-	}
 	else if (m_metadataHash == MetadataHash::Bzzr1)
 		encoder.pushBytes("bzzr1", util::bzzr1Hash(_metadata).asBytes());
 	else

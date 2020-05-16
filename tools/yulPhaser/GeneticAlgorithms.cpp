@@ -16,35 +16,160 @@
 */
 
 #include <tools/yulPhaser/GeneticAlgorithms.h>
+#include <tools/yulPhaser/Mutations.h>
 #include <tools/yulPhaser/Selections.h>
+#include <tools/yulPhaser/PairSelections.h>
 
 using namespace std;
+using namespace solidity;
 using namespace solidity::phaser;
 
-void GeneticAlgorithm::run(optional<size_t> _numRounds)
+function<Crossover> phaser::buildCrossoverOperator(
+	CrossoverChoice _choice,
+	optional<double> _uniformCrossoverSwapChance
+)
 {
-	for (size_t round = 0; !_numRounds.has_value() || round < _numRounds.value(); ++round)
+	switch (_choice)
 	{
-		runNextRound();
-
-		m_outputStream << "---------- ROUND " << round << " ----------" << endl;
-		m_outputStream << m_population;
-	}
+		case CrossoverChoice::SinglePoint:
+			return randomPointCrossover();
+		case CrossoverChoice::TwoPoint:
+			return randomTwoPointCrossover();
+		case CrossoverChoice::Uniform:
+			assert(_uniformCrossoverSwapChance.has_value());
+			return uniformCrossover(_uniformCrossoverSwapChance.value());
+		default:
+			assertThrow(false, solidity::util::Exception, "Invalid CrossoverChoice value.");
+	};
 }
 
-void RandomAlgorithm::runNextRound()
+function<SymmetricCrossover> phaser::buildSymmetricCrossoverOperator(
+	CrossoverChoice _choice,
+	optional<double> _uniformCrossoverSwapChance
+)
+{
+	switch (_choice)
+	{
+		case CrossoverChoice::SinglePoint:
+			return symmetricRandomPointCrossover();
+		case CrossoverChoice::TwoPoint:
+			return symmetricRandomTwoPointCrossover();
+		case CrossoverChoice::Uniform:
+			assert(_uniformCrossoverSwapChance.has_value());
+			return symmetricUniformCrossover(_uniformCrossoverSwapChance.value());
+		default:
+			assertThrow(false, solidity::util::Exception, "Invalid CrossoverChoice value.");
+	};
+}
+
+Population RandomAlgorithm::runNextRound(Population _population)
 {
 	RangeSelection elite(0.0, m_options.elitePoolSize);
 
-	Population elitePopulation = m_population.select(elite);
-	size_t replacementCount = m_population.individuals().size() - elitePopulation.individuals().size();
+	Population elitePopulation = _population.select(elite);
+	size_t replacementCount = _population.individuals().size() - elitePopulation.individuals().size();
 
-	m_population =
+	return
 		move(elitePopulation) +
 		Population::makeRandom(
-			m_population.fitnessMetric(),
+			_population.fitnessMetric(),
 			replacementCount,
 			m_options.minChromosomeLength,
 			m_options.maxChromosomeLength
 		);
+}
+
+Population GenerationalElitistWithExclusivePools::runNextRound(Population _population)
+{
+	double elitePoolSize = 1.0 - (m_options.mutationPoolSize + m_options.crossoverPoolSize);
+
+	RangeSelection elitePool(0.0, elitePoolSize);
+	RandomSelection mutationPoolFromElite(m_options.mutationPoolSize / elitePoolSize);
+	RandomPairSelection crossoverPoolFromElite(m_options.crossoverPoolSize / elitePoolSize);
+
+	std::function<Mutation> mutationOperator = alternativeMutations(
+		m_options.randomisationChance,
+		geneRandomisation(m_options.percentGenesToRandomise),
+		alternativeMutations(
+			m_options.deletionVsAdditionChance,
+			geneDeletion(m_options.percentGenesToAddOrDelete),
+			geneAddition(m_options.percentGenesToAddOrDelete)
+		)
+	);
+	std::function<Crossover> crossoverOperator = buildCrossoverOperator(
+		m_options.crossover,
+		m_options.uniformCrossoverSwapChance
+	);
+
+	return
+		_population.select(elitePool) +
+		_population.select(elitePool).mutate(mutationPoolFromElite, mutationOperator) +
+		_population.select(elitePool).crossover(crossoverPoolFromElite, crossoverOperator);
+}
+
+Population ClassicGeneticAlgorithm::runNextRound(Population _population)
+{
+	Population elite = _population.select(RangeSelection(0.0, m_options.elitePoolSize));
+	Population rest = _population.select(RangeSelection(m_options.elitePoolSize, 1.0));
+
+	Population selectedPopulation = select(_population, rest.individuals().size());
+
+	std::function<SymmetricCrossover> crossoverOperator = buildSymmetricCrossoverOperator(
+		m_options.crossover,
+		m_options.uniformCrossoverSwapChance
+	);
+
+	Population crossedPopulation = Population::combine(
+		selectedPopulation.symmetricCrossoverWithRemainder(
+			PairsFromRandomSubset(m_options.crossoverChance),
+			crossoverOperator
+		)
+	);
+
+	std::function<Mutation> mutationOperator = mutationSequence({
+		geneRandomisation(m_options.mutationChance),
+		geneDeletion(m_options.deletionChance),
+		geneAddition(m_options.additionChance),
+	});
+
+	RangeSelection all(0.0, 1.0);
+	Population mutatedPopulation = crossedPopulation.mutate(all, mutationOperator);
+
+	return elite + mutatedPopulation;
+}
+
+Population ClassicGeneticAlgorithm::select(Population _population, size_t _selectionSize)
+{
+	if (_population.individuals().size() == 0)
+		return _population;
+
+	size_t maxFitness = 0;
+	for (auto const& individual: _population.individuals())
+		maxFitness = max(maxFitness, individual.fitness);
+
+	size_t rouletteRange = 0;
+	for (auto const& individual: _population.individuals())
+		// Add 1 to make sure that every chromosome has non-zero probability of being chosen
+		rouletteRange += maxFitness + 1 - individual.fitness;
+
+	vector<Individual> selectedIndividuals;
+	for (size_t i = 0; i < _selectionSize; ++i)
+	{
+		uint32_t ball = SimulationRNG::uniformInt(0, rouletteRange - 1);
+
+		size_t cumulativeFitness = 0;
+		for (auto const& individual: _population.individuals())
+		{
+			size_t pocketSize = maxFitness + 1 - individual.fitness;
+			if (ball < cumulativeFitness + pocketSize)
+			{
+				selectedIndividuals.push_back(individual);
+				break;
+			}
+			cumulativeFitness += pocketSize;
+		}
+	}
+
+	assert(selectedIndividuals.size() == _selectionSize);
+	return Population(_population.fitnessMetric(), selectedIndividuals);
 }

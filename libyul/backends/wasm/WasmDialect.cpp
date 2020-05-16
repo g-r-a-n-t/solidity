@@ -99,9 +99,11 @@ WasmDialect::WasmDialect()
 	addFunction("unreachable", {}, {}, false);
 	m_functions["unreachable"_yulstring].sideEffects.invalidatesStorage = false;
 	m_functions["unreachable"_yulstring].sideEffects.invalidatesMemory = false;
+	m_functions["unreachable"_yulstring].controlFlowSideEffects.terminates = true;
+	m_functions["unreachable"_yulstring].controlFlowSideEffects.reverts = true;
 
-	addFunction("datasize", {i64}, {i64}, true, true);
-	addFunction("dataoffset", {i64}, {i64}, true, true);
+	addFunction("datasize", {i64}, {i64}, true, {true});
+	addFunction("dataoffset", {i64}, {i64}, true, {true});
 
 	addEthereumExternals();
 }
@@ -147,7 +149,13 @@ void WasmDialect::addEthereumExternals()
 	static string const i64{"i64"};
 	static string const i32{"i32"};
 	static string const i32ptr{"i32"}; // Uses "i32" on purpose.
-	struct External { string name; vector<string> parameters; vector<string> returns; };
+	struct External
+	{
+		string name;
+		vector<string> parameters;
+		vector<string> returns;
+		ControlFlowSideEffects controlFlowSideEffects = ControlFlowSideEffects{};
+	};
 	static vector<External> externals{
 		{"getAddress", {i32ptr}, {}},
 		{"getExternalBalance", {i32ptr, i32ptr}, {}},
@@ -175,11 +183,11 @@ void WasmDialect::addEthereumExternals()
 		{"log", {i32ptr, i32, i32, i32ptr, i32ptr, i32ptr, i32ptr}, {}},
 		{"getBlockNumber", {}, {i64}},
 		{"getTxOrigin", {i32ptr}, {}},
-		{"finish", {i32ptr, i32}, {}},
-		{"revert", {i32ptr, i32}, {}},
+		{"finish", {i32ptr, i32}, {}, ControlFlowSideEffects{true, false}},
+		{"revert", {i32ptr, i32}, {}, ControlFlowSideEffects{true, true}},
 		{"getReturnDataSize", {}, {i32}},
 		{"returnDataCopy", {i32ptr, i32, i32}, {}},
-		{"selfDestruct", {i32ptr}, {}},
+		{"selfDestruct", {i32ptr}, {}, ControlFlowSideEffects{true, false}},
 		{"getBlockTimestamp", {}, {i64}}
 	};
 	for (External const& ext: externals)
@@ -193,9 +201,10 @@ void WasmDialect::addEthereumExternals()
 			f.returns.emplace_back(YulString(p));
 		// TODO some of them are side effect free.
 		f.sideEffects = SideEffects::worst();
+		f.controlFlowSideEffects = ext.controlFlowSideEffects;
 		f.isMSize = false;
 		f.sideEffects.invalidatesStorage = (ext.name == "storageStore");
-		f.literalArguments = false;
+		f.literalArguments.reset();
 	}
 }
 
@@ -204,7 +213,7 @@ void WasmDialect::addFunction(
 	vector<YulString> _params,
 	vector<YulString> _returns,
 	bool _movable,
-	bool _literalArguments
+	std::vector<bool> _literalArguments
 )
 {
 	YulString name{move(_name)};
@@ -215,5 +224,8 @@ void WasmDialect::addFunction(
 	f.returns = std::move(_returns);
 	f.sideEffects = _movable ? SideEffects{} : SideEffects::worst();
 	f.isMSize = false;
-	f.literalArguments = _literalArguments;
+	if (!_literalArguments.empty())
+		f.literalArguments = std::move(_literalArguments);
+	else
+		f.literalArguments.reset();
 }

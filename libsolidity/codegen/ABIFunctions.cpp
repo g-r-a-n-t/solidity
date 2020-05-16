@@ -28,7 +28,6 @@
 #include <libsolutil/StringUtils.h>
 
 #include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 
 using namespace std;
 using namespace solidity;
@@ -38,7 +37,8 @@ using namespace solidity::frontend;
 string ABIFunctions::tupleEncoder(
 	TypePointers const& _givenTypes,
 	TypePointers const& _targetTypes,
-	bool _encodeAsLibraryTypes
+	bool _encodeAsLibraryTypes,
+	bool _reversed
 )
 {
 	EncodingOptions options;
@@ -54,8 +54,10 @@ string ABIFunctions::tupleEncoder(
 	for (auto const& t: _targetTypes)
 		functionName += t->identifier() + "_";
 	functionName += options.toFunctionNameSuffix();
+	if (_reversed)
+		functionName += "_reversed";
 
-	return createExternallyUsedFunction(functionName, [&]() {
+	return createFunction(functionName, [&]() {
 		// Note that the values are in reverse due to the difference in calling semantics.
 		Whiskers templ(R"(
 			function <functionName>(headStart <valueParams>) -> tail {
@@ -94,7 +96,10 @@ string ABIFunctions::tupleEncoder(
 			stackPos += sizeOnStack;
 		}
 		solAssert(headPos == headSize_, "");
-		string valueParams = suffixedVariableNameList("value", stackPos, 0);
+		string valueParams =
+			_reversed ?
+			suffixedVariableNameList("value", stackPos, 0) :
+			suffixedVariableNameList("value", 0, stackPos);
 		templ("valueParams", valueParams.empty() ? "" : ", " + valueParams);
 		templ("encodeElements", encodeElements);
 
@@ -104,7 +109,8 @@ string ABIFunctions::tupleEncoder(
 
 string ABIFunctions::tupleEncoderPacked(
 	TypePointers const& _givenTypes,
-	TypePointers const& _targetTypes
+	TypePointers const& _targetTypes,
+	bool _reversed
 )
 {
 	EncodingOptions options;
@@ -120,8 +126,10 @@ string ABIFunctions::tupleEncoderPacked(
 	for (auto const& t: _targetTypes)
 		functionName += t->identifier() + "_";
 	functionName += options.toFunctionNameSuffix();
+	if (_reversed)
+		functionName += "_reversed";
 
-	return createExternallyUsedFunction(functionName, [&]() {
+	return createFunction(functionName, [&]() {
 		solAssert(!_givenTypes.empty(), "");
 
 		// Note that the values are in reverse due to the difference in calling semantics.
@@ -158,7 +166,10 @@ string ABIFunctions::tupleEncoderPacked(
 			encodeElements += elementTempl.render();
 			stackPos += sizeOnStack;
 		}
-		string valueParams = suffixedVariableNameList("value", stackPos, 0);
+		string valueParams =
+			_reversed ?
+			suffixedVariableNameList("value", stackPos, 0) :
+			suffixedVariableNameList("value", 0, stackPos);
 		templ("valueParams", valueParams.empty() ? "" : ", " + valueParams);
 		templ("encodeElements", encodeElements);
 
@@ -173,7 +184,7 @@ string ABIFunctions::tupleDecoder(TypePointers const& _types, bool _fromMemory)
 	if (_fromMemory)
 		functionName += "_fromMemory";
 
-	return createExternallyUsedFunction(functionName, [&]() {
+	return createFunction(functionName, [&]() {
 		TypePointers decodingTypes;
 		for (auto const& t: _types)
 			decodingTypes.emplace_back(t->decodingType());
@@ -240,13 +251,6 @@ string ABIFunctions::tupleDecoder(TypePointers const& _types, bool _fromMemory)
 	});
 }
 
-pair<string, set<string>> ABIFunctions::requestedFunctions()
-{
-	std::set<string> empty;
-	swap(empty, m_externallyUsedFunctions);
-	return make_pair(m_functionCollector->requestedFunctions(), std::move(empty));
-}
-
 string ABIFunctions::EncodingOptions::toFunctionNameSuffix() const
 {
 	string suffix;
@@ -275,31 +279,47 @@ string ABIFunctions::abiEncodingFunction(
 		return abiEncodingFunctionStringLiteral(_from, to, _options);
 	else if (auto toArray = dynamic_cast<ArrayType const*>(&to))
 	{
-		solAssert(_from.category() == Type::Category::Array, "");
-		solAssert(to.dataStoredIn(DataLocation::Memory), "");
-		ArrayType const& fromArray = dynamic_cast<ArrayType const&>(_from);
+		ArrayType const* fromArray = nullptr;
+		switch (_from.category())
+		{
+			case Type::Category::Array:
+				fromArray = dynamic_cast<ArrayType const*>(&_from);
+				break;
+			case Type::Category::ArraySlice:
+				fromArray = &dynamic_cast<ArraySliceType const*>(&_from)->arrayType();
+				solAssert(
+					fromArray->dataStoredIn(DataLocation::CallData) &&
+					fromArray->isDynamicallySized() &&
+					!fromArray->baseType()->isDynamicallyEncoded(),
+					""
+				);
+				break;
+			default:
+				solAssert(false, "");
+				break;
+		}
 
-		switch (fromArray.location())
+		switch (fromArray->location())
 		{
 			case DataLocation::CallData:
 				if (
-					fromArray.isByteArray() ||
-					*fromArray.baseType() == *TypeProvider::uint256() ||
-					*fromArray.baseType() == FixedBytesType(32)
+					fromArray->isByteArray() ||
+					*fromArray->baseType() == *TypeProvider::uint256() ||
+					*fromArray->baseType() == FixedBytesType(32)
 				)
-					return abiEncodingFunctionCalldataArrayWithoutCleanup(fromArray, *toArray, _options);
+					return abiEncodingFunctionCalldataArrayWithoutCleanup(*fromArray, *toArray, _options);
 				else
-					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+					return abiEncodingFunctionSimpleArray(*fromArray, *toArray, _options);
 			case DataLocation::Memory:
-				if (fromArray.isByteArray())
-					return abiEncodingFunctionMemoryByteArray(fromArray, *toArray, _options);
+				if (fromArray->isByteArray())
+					return abiEncodingFunctionMemoryByteArray(*fromArray, *toArray, _options);
 				else
-					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+					return abiEncodingFunctionSimpleArray(*fromArray, *toArray, _options);
 			case DataLocation::Storage:
-				if (fromArray.baseType()->storageBytes() <= 16)
-					return abiEncodingFunctionCompactStorageArray(fromArray, *toArray, _options);
+				if (fromArray->baseType()->storageBytes() <= 16)
+					return abiEncodingFunctionCompactStorageArray(*fromArray, *toArray, _options);
 				else
-					return abiEncodingFunctionSimpleArray(fromArray, *toArray, _options);
+					return abiEncodingFunctionSimpleArray(*fromArray, *toArray, _options);
 			default:
 				solAssert(false, "");
 		}
@@ -850,7 +870,7 @@ string ABIFunctions::abiEncodingFunctionStruct(
 			if (dynamicMember)
 				solAssert(dynamic, "");
 
-			members.push_back({});
+			members.emplace_back();
 			members.back()["preprocess"] = "";
 
 			switch (_from.location())
@@ -1343,7 +1363,7 @@ string ABIFunctions::abiDecodingFunctionStruct(StructType const& _type, bool _fr
 			memberTempl("memoryOffset", toCompactHexWithPrefix(_type.memoryOffsetOfMember(member.name)));
 			memberTempl("abiDecode", abiDecodingFunction(*member.type, _fromMemory, false));
 
-			members.push_back({});
+			members.emplace_back();
 			members.back()["decode"] = memberTempl.render();
 			members.back()["memberName"] = member.name;
 			headPos += decodingType->calldataHeadSize();
@@ -1499,14 +1519,7 @@ string ABIFunctions::arrayStoreLengthForEncodingFunction(ArrayType const& _type,
 
 string ABIFunctions::createFunction(string const& _name, function<string ()> const& _creator)
 {
-	return m_functionCollector->createFunction(_name, _creator);
-}
-
-string ABIFunctions::createExternallyUsedFunction(string const& _name, function<string ()> const& _creator)
-{
-	string name = createFunction(_name, _creator);
-	m_externallyUsedFunctions.insert(name);
-	return name;
+	return m_functionCollector.createFunction(_name, _creator);
 }
 
 size_t ABIFunctions::headSize(TypePointers const& _targetTypes)

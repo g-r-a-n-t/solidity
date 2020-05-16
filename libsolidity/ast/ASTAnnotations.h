@@ -47,6 +47,14 @@ using TypePointer = Type const*;
 
 struct ASTAnnotation
 {
+	ASTAnnotation() = default;
+
+	ASTAnnotation(ASTAnnotation const&) = delete;
+	ASTAnnotation(ASTAnnotation&&) = delete;
+
+	ASTAnnotation& operator=(ASTAnnotation const&) = delete;
+	ASTAnnotation& operator=(ASTAnnotation&&) = delete;
+
 	virtual ~ASTAnnotation() = default;
 };
 
@@ -58,7 +66,16 @@ struct DocTag
 
 struct StructurallyDocumentedAnnotation
 {
+	StructurallyDocumentedAnnotation() = default;
+
+	StructurallyDocumentedAnnotation(StructurallyDocumentedAnnotation const&) = delete;
+	StructurallyDocumentedAnnotation(StructurallyDocumentedAnnotation&&) = delete;
+
+	StructurallyDocumentedAnnotation& operator=(StructurallyDocumentedAnnotation const&) = delete;
+	StructurallyDocumentedAnnotation& operator=(StructurallyDocumentedAnnotation&&) = delete;
+
 	virtual ~StructurallyDocumentedAnnotation() = default;
+
 	/// Mapping docstring tag name -> content.
 	std::multimap<std::string, DocTag> docTags;
 };
@@ -75,6 +92,16 @@ struct SourceUnitAnnotation: ASTAnnotation
 
 struct ScopableAnnotation
 {
+	ScopableAnnotation() = default;
+
+	ScopableAnnotation(ScopableAnnotation const&) = delete;
+	ScopableAnnotation(ScopableAnnotation&&) = delete;
+
+	ScopableAnnotation& operator=(ScopableAnnotation const&) = delete;
+	ScopableAnnotation& operator=(ScopableAnnotation&&) = delete;
+
+	virtual ~ScopableAnnotation() = default;
+
 	/// The scope this declaration resides in. Can be nullptr if it is the global scope.
 	/// Available only after name and type resolution step.
 	ASTNode const* scope = nullptr;
@@ -101,10 +128,20 @@ struct TypeDeclarationAnnotation: DeclarationAnnotation
 	std::string canonicalName;
 };
 
+struct StructDeclarationAnnotation: TypeDeclarationAnnotation
+{
+	/// Whether the struct is recursive, i.e. if the struct (recursively) contains a member that involves a struct of the same
+	/// type, either in a dynamic array, as member of another struct or inside a mapping.
+	/// Only cases in which the recursive occurrence is within a dynamic array or a mapping are valid, while direct
+	/// recursion immediately raises an error.
+	/// Will be filled in by the DeclarationTypeChecker.
+	std::optional<bool> recursive;
+};
+
 struct ContractDefinitionAnnotation: TypeDeclarationAnnotation, StructurallyDocumentedAnnotation
 {
-	/// List of functions without a body. Can also contain functions from base classes.
-	std::vector<FunctionDefinition const*> unimplementedFunctions;
+	/// List of functions and modifiers without a body. Can also contain functions from base classes.
+	std::vector<Declaration const*> unimplementedDeclarations;
 	/// List of all (direct and indirect) base contracts in order from derived to
 	/// base, including the contract itself.
 	std::vector<ContractDefinition const*> linearizedBaseContracts;
@@ -207,7 +244,10 @@ struct ExpressionAnnotation: ASTAnnotation
 	/// Whether it is an LValue (i.e. something that can be assigned to).
 	bool isLValue = false;
 	/// Whether the expression is used in a context where the LValue is actually required.
-	bool lValueRequested = false;
+	bool willBeWrittenTo = false;
+	/// Whether the expression is an lvalue that is only assigned.
+	/// Would be false for --, ++, delete, +=, -=, ....
+	bool lValueOfOrdinaryAssignment = false;
 
 	/// Types and - if given - names of arguments if the expr. is a function
 	/// that is called, used for overload resoultion
@@ -218,6 +258,8 @@ struct IdentifierAnnotation: ExpressionAnnotation
 {
 	/// Referenced declaration, set at latest during overload resolution stage.
 	Declaration const* referencedDeclaration = nullptr;
+	/// List of possible declarations it could refer to (can contain duplicates).
+	std::vector<Declaration const*> candidateDeclarations;
 	/// List of possible declarations it could refer to.
 	std::vector<Declaration const*> overloadedDeclarations;
 };

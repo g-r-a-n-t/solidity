@@ -41,6 +41,20 @@ using namespace solidity::util;
 
 namespace
 {
+
+void visitArguments(
+	AbstractAssembly& _assembly,
+	FunctionCall const& _call,
+	function<void(Expression const&)> _visitExpression
+)
+{
+	for (auto const& arg: _call.arguments | boost::adaptors::reversed)
+		_visitExpression(arg);
+
+	_assembly.setSourceLocation(_call.location);
+}
+
+
 pair<YulString, BuiltinFunctionForEVM> createEVMFunction(
 	string const& _name,
 	evmasm::Instruction _instruction
@@ -52,16 +66,18 @@ pair<YulString, BuiltinFunctionForEVM> createEVMFunction(
 	f.parameters.resize(info.args);
 	f.returns.resize(info.ret);
 	f.sideEffects = EVMDialect::sideEffectsOfInstruction(_instruction);
+	f.controlFlowSideEffects.terminates = evmasm::SemanticInformation::terminatesControlFlow(_instruction);
+	f.controlFlowSideEffects.reverts = evmasm::SemanticInformation::reverts(_instruction);
 	f.isMSize = _instruction == evmasm::Instruction::MSIZE;
-	f.literalArguments = false;
+	f.literalArguments.reset();
 	f.instruction = _instruction;
 	f.generateCode = [_instruction](
-		FunctionCall const&,
+		FunctionCall const& _call,
 		AbstractAssembly& _assembly,
 		BuiltinContext&,
-		std::function<void()> _visitArguments
+		std::function<void(Expression const&)> _visitExpression
 	) {
-		_visitArguments();
+		visitArguments(_assembly, _call, _visitExpression);
 		_assembly.appendInstruction(_instruction);
 	};
 
@@ -73,17 +89,22 @@ pair<YulString, BuiltinFunctionForEVM> createFunction(
 	size_t _params,
 	size_t _returns,
 	SideEffects _sideEffects,
-	bool _literalArguments,
-	std::function<void(FunctionCall const&, AbstractAssembly&, BuiltinContext&, std::function<void()>)> _generateCode
+	vector<bool> _literalArguments,
+	std::function<void(FunctionCall const&, AbstractAssembly&, BuiltinContext&, std::function<void(Expression const&)>)> _generateCode
 )
 {
+	solAssert(_literalArguments.size() == _params || _literalArguments.empty(), "");
+
 	YulString name{std::move(_name)};
 	BuiltinFunctionForEVM f;
 	f.name = name;
 	f.parameters.resize(_params);
 	f.returns.resize(_returns);
 	f.sideEffects = std::move(_sideEffects);
-	f.literalArguments = _literalArguments;
+	if (!_literalArguments.empty())
+		f.literalArguments = std::move(_literalArguments);
+	else
+		f.literalArguments.reset();
 	f.isMSize = false;
 	f.instruction = {};
 	f.generateCode = std::move(_generateCode);
@@ -105,11 +126,11 @@ map<YulString, BuiltinFunctionForEVM> createBuiltins(langutil::EVMVersion _evmVe
 
 	if (_objectAccess)
 	{
-		builtins.emplace(createFunction("datasize", 1, 1, SideEffects{}, true, [](
+		builtins.emplace(createFunction("datasize", 1, 1, SideEffects{}, {true}, [](
 			FunctionCall const& _call,
 			AbstractAssembly& _assembly,
 			BuiltinContext& _context,
-			function<void()>
+			std::function<void(Expression const&)>
 		) {
 			yulAssert(_context.currentObject, "No object available.");
 			yulAssert(_call.arguments.size() == 1, "");
@@ -126,11 +147,11 @@ map<YulString, BuiltinFunctionForEVM> createBuiltins(langutil::EVMVersion _evmVe
 				_assembly.appendDataSize(_context.subIDs.at(dataName));
 			}
 		}));
-		builtins.emplace(createFunction("dataoffset", 1, 1, SideEffects{}, true, [](
+		builtins.emplace(createFunction("dataoffset", 1, 1, SideEffects{}, {true}, [](
 			FunctionCall const& _call,
 			AbstractAssembly& _assembly,
 			BuiltinContext& _context,
-			std::function<void()>
+			std::function<void(Expression const&)>
 		) {
 			yulAssert(_context.currentObject, "No object available.");
 			yulAssert(_call.arguments.size() == 1, "");
@@ -152,15 +173,51 @@ map<YulString, BuiltinFunctionForEVM> createBuiltins(langutil::EVMVersion _evmVe
 			3,
 			0,
 			SideEffects{false, false, false, false, true},
-			false,
+			{},
 			[](
-				FunctionCall const&,
+				FunctionCall const& _call,
 				AbstractAssembly& _assembly,
 				BuiltinContext&,
-				std::function<void()> _visitArguments
+				std::function<void(Expression const&)> _visitExpression
 			) {
-				_visitArguments();
+				visitArguments(_assembly, _call, _visitExpression);
 				_assembly.appendInstruction(evmasm::Instruction::CODECOPY);
+			}
+		));
+		builtins.emplace(createFunction(
+			"setimmutable",
+			2,
+			0,
+			SideEffects{false, false, false, false, true},
+			{true, false},
+			[](
+				FunctionCall const& _call,
+				AbstractAssembly& _assembly,
+				BuiltinContext&,
+				std::function<void(Expression const&)> _visitExpression
+			) {
+				solAssert(_call.arguments.size() == 2, "");
+
+				_visitExpression(_call.arguments[1]);
+				_assembly.setSourceLocation(_call.location);
+				YulString identifier = std::get<Literal>(_call.arguments.front()).value;
+				_assembly.appendImmutableAssignment(identifier.str());
+			}
+		));
+		builtins.emplace(createFunction(
+			"loadimmutable",
+			1,
+			1,
+			SideEffects{},
+			{true},
+			[](
+				FunctionCall const& _call,
+				AbstractAssembly& _assembly,
+				BuiltinContext&,
+				std::function<void(Expression const&)>
+			) {
+				solAssert(_call.arguments.size() == 1, "");
+				_assembly.appendImmutable(std::get<Literal>(_call.arguments.front()).value.str());
 			}
 		));
 	}
@@ -168,6 +225,7 @@ map<YulString, BuiltinFunctionForEVM> createBuiltins(langutil::EVMVersion _evmVe
 }
 
 }
+
 
 EVMDialect::EVMDialect(langutil::EVMVersion _evmVersion, bool _objectAccess):
 	m_objectAccess(_objectAccess),
@@ -260,24 +318,24 @@ EVMDialectTyped::EVMDialectTyped(langutil::EVMVersion _evmVersion, bool _objectA
 	m_functions["popbool"_yulstring] = m_functions["pop"_yulstring];
 	m_functions["popbool"_yulstring].name = "popbool"_yulstring;
 	m_functions["popbool"_yulstring].parameters = {"bool"_yulstring};
-	m_functions.insert(createFunction("bool_to_u256", 1, 1, {}, false, [](
-		FunctionCall const&,
-		AbstractAssembly&,
+	m_functions.insert(createFunction("bool_to_u256", 1, 1, {}, {}, [](
+		FunctionCall const& _call,
+		AbstractAssembly& _assembly,
 		BuiltinContext&,
-		std::function<void()> _visitArguments
+		std::function<void(Expression const&)> _visitExpression
 	) {
-		_visitArguments();
+		visitArguments(_assembly, _call, _visitExpression);
 	}));
 	m_functions["bool_to_u256"_yulstring].parameters = {"bool"_yulstring};
 	m_functions["bool_to_u256"_yulstring].returns = {"u256"_yulstring};
-	m_functions.insert(createFunction("u256_to_bool", 1, 1, {}, false, [](
-		FunctionCall const&,
+	m_functions.insert(createFunction("u256_to_bool", 1, 1, {}, {}, [](
+		FunctionCall const& _call,
 		AbstractAssembly& _assembly,
 		BuiltinContext&,
-		std::function<void()> _visitArguments
+		std::function<void(Expression const&)> _visitExpression
 	) {
 		// A value larger than 1 causes an invalid instruction.
-		_visitArguments();
+		visitArguments(_assembly, _call, _visitExpression);
 		_assembly.appendConstant(2);
 		_assembly.appendInstruction(evmasm::Instruction::DUP2);
 		_assembly.appendInstruction(evmasm::Instruction::LT);
