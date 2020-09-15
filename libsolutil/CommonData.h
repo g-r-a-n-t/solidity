@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /** @file CommonData.h
  * @author Gav Wood <i@gavwood.com>
  * @date 2014
@@ -42,7 +43,7 @@
 template <class T, class U> std::vector<T>& operator+=(std::vector<T>& _a, U& _b)
 {
 	for (auto const& i: _b)
-		_a.push_back(i);
+		_a.push_back(T(i));
 	return _a;
 }
 /// Concatenate the contents of a container onto a vector, move variant.
@@ -77,6 +78,7 @@ template <class U, class... T> std::set<T...>& operator+=(std::set<T...>& _a, U&
 		_a.insert(std::move(x));
 	return _a;
 }
+
 /// Concatenate two vectors of elements.
 template <class T>
 inline std::vector<T> operator+(std::vector<T> const& _a, std::vector<T> const& _b)
@@ -85,6 +87,7 @@ inline std::vector<T> operator+(std::vector<T> const& _a, std::vector<T> const& 
 	ret += _b;
 	return ret;
 }
+
 /// Concatenate two vectors of elements, moving them.
 template <class T>
 inline std::vector<T> operator+(std::vector<T>&& _a, std::vector<T>&& _b)
@@ -96,6 +99,7 @@ inline std::vector<T> operator+(std::vector<T>&& _a, std::vector<T>&& _b)
 		ret += std::move(_b);
 	return ret;
 }
+
 /// Concatenate something to a sets of elements.
 template <class T, class U>
 inline std::set<T> operator+(std::set<T> const& _a, U&& _b)
@@ -104,6 +108,7 @@ inline std::set<T> operator+(std::set<T> const& _a, U&& _b)
 	ret += std::forward<U>(_b);
 	return ret;
 }
+
 /// Concatenate something to a sets of elements, move variant.
 template <class T, class U>
 inline std::set<T> operator+(std::set<T>&& _a, U&& _b)
@@ -204,6 +209,13 @@ std::map<V, K> invertMap(std::map<K, V> const& originalMap)
 	return inverseMap;
 }
 
+/// Returns a set of keys of a map.
+template <typename K, typename V>
+std::set<K> keys(std::map<K, V> const& _map)
+{
+	return applyMap(_map, [](auto const& _elem) { return _elem.first; }, std::set<K>{});
+}
+
 // String conversion functions, mainly to/from hex/nibble/byte representations.
 
 enum class WhenError
@@ -299,7 +311,7 @@ template <class T>
 inline bytes toCompactBigEndian(T _val, unsigned _min = 0)
 {
 	static_assert(std::is_same<bigint, T>::value || !std::numeric_limits<T>::is_signed, "only unsigned types or bigint supported"); //bigint does not carry sign bit on shift
-	int i = 0;
+	unsigned i = 0;
 	for (T v = _val; v; ++i, v >>= 8) {}
 	bytes ret(std::max<unsigned>(_min, i), 0);
 	toBigEndian(_val, ret);
@@ -379,7 +391,7 @@ void iterateReplacing(std::vector<T>& _vector, F const& _f)
 		{
 			if (!useModified)
 			{
-				std::move(_vector.begin(), _vector.begin() + i, back_inserter(modifiedVector));
+				std::move(_vector.begin(), _vector.begin() + ptrdiff_t(i), back_inserter(modifiedVector));
 				useModified = true;
 			}
 			modifiedVector += std::move(*r);
@@ -406,7 +418,7 @@ void iterateReplacingWindow(std::vector<T>& _vector, F const& _f, std::index_seq
 		{
 			if (!useModified)
 			{
-				std::move(_vector.begin(), _vector.begin() + i, back_inserter(modifiedVector));
+				std::move(_vector.begin(), _vector.begin() + ptrdiff_t(i), back_inserter(modifiedVector));
 				useModified = true;
 			}
 			modifiedVector += std::move(*r);

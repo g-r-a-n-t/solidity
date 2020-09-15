@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * Optimiser suite that combines all steps and also provides the settings for the heuristics.
  */
@@ -40,7 +41,9 @@
 #include <libyul/optimiser/ForLoopConditionOutOfBody.h>
 #include <libyul/optimiser/ForLoopInitRewriter.h>
 #include <libyul/optimiser/ForLoopConditionIntoBody.h>
+#include <libyul/optimiser/ReasoningBasedSimplifier.h>
 #include <libyul/optimiser/Rematerialiser.h>
+#include <libyul/optimiser/UnusedFunctionParameterPruner.h>
 #include <libyul/optimiser/UnusedPruner.h>
 #include <libyul/optimiser/ExpressionSimplifier.h>
 #include <libyul/optimiser/CommonSubexpressionEliminator.h>
@@ -55,6 +58,7 @@
 #include <libyul/optimiser/LoadResolver.h>
 #include <libyul/optimiser/LoopInvariantCodeMotion.h>
 #include <libyul/optimiser/Metrics.h>
+#include <libyul/optimiser/NameSimplifier.h>
 #include <libyul/backends/evm/ConstantOptimiser.h>
 #include <libyul/AsmAnalysis.h>
 #include <libyul/AsmAnalysisInfo.h>
@@ -179,11 +183,14 @@ map<string, unique_ptr<OptimiserStep>> const& OptimiserSuite::allSteps()
 			LiteralRematerialiser,
 			LoadResolver,
 			LoopInvariantCodeMotion,
+			NameSimplifier,
 			RedundantAssignEliminator,
+			ReasoningBasedSimplifier,
 			Rematerialiser,
 			SSAReverser,
 			SSATransform,
 			StructuralSimplifier,
+			UnusedFunctionParameterPruner,
 			UnusedPruner,
 			VarDeclInitializer
 		>();
@@ -215,11 +222,14 @@ map<string, char> const& OptimiserSuite::stepNameToAbbreviationMap()
 		{LiteralRematerialiser::name,         'T'},
 		{LoadResolver::name,                  'L'},
 		{LoopInvariantCodeMotion::name,       'M'},
+		{NameSimplifier::name,                'N'},
+		{ReasoningBasedSimplifier::name,      'R'},
 		{RedundantAssignEliminator::name,     'r'},
 		{Rematerialiser::name,                'm'},
 		{SSAReverser::name,                   'V'},
 		{SSATransform::name,                  'a'},
 		{StructuralSimplifier::name,          't'},
+		{UnusedFunctionParameterPruner::name, 'p'},
 		{UnusedPruner::name,                  'u'},
 		{VarDeclInitializer::name,            'd'},
 	};
@@ -259,6 +269,7 @@ void OptimiserSuite::validateSequence(string const& _stepAbbreviations)
 			insideLoop = false;
 			break;
 		default:
+		{
 			yulAssert(
 				string(NonStepAbbreviations).find(abbreviation) == string::npos,
 				"Unhandled syntactic element in the abbreviation sequence"
@@ -268,6 +279,14 @@ void OptimiserSuite::validateSequence(string const& _stepAbbreviations)
 				OptimizerException,
 				"'"s + abbreviation + "' is not a valid step abbreviation"
 			);
+			optional<string> invalid = allSteps().at(stepAbbreviationToNameMap().at(abbreviation))->invalidInCurrentEnvironment();
+			assertThrow(
+				!invalid.has_value(),
+				OptimizerException,
+				"'"s + abbreviation + "' is invalid in the current environment: " + *invalid
+			);
+
+		}
 		}
 	assertThrow(!insideLoop, OptimizerException, "Unbalanced brackets");
 }

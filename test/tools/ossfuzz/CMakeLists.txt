@@ -8,21 +8,49 @@ add_dependencies(ossfuzz
         strictasm_assembly_ossfuzz
         )
 
+
 if (OSSFUZZ)
     add_custom_target(ossfuzz_proto)
-    add_dependencies(ossfuzz_proto yul_proto_ossfuzz yul_proto_diff_ossfuzz sol_proto_ossfuzz)
+    add_dependencies(ossfuzz_proto
+	    sol_proto_ossfuzz
+	    yul_proto_ossfuzz
+	    yul_proto_diff_ossfuzz
+	    yul_proto_diff_custom_mutate_ossfuzz
+    )
 
     add_custom_target(ossfuzz_abiv2)
     add_dependencies(ossfuzz_abiv2 abiv2_proto_ossfuzz)
 endif()
 
 if (OSSFUZZ)
-    add_executable(solc_opt_ossfuzz solc_opt_ossfuzz.cpp ../fuzzer_common.cpp)
-    target_link_libraries(solc_opt_ossfuzz PRIVATE libsolc evmasm)
+    add_executable(solc_opt_ossfuzz
+            solc_opt_ossfuzz.cpp
+            ../fuzzer_common.cpp
+            ../../TestCaseReader.cpp
+            SolidityLexer.cpp
+            SolidityParser.cpp
+    )
+    target_compile_options(solc_opt_ossfuzz
+            PUBLIC
+            ${COMPILE_OPTIONS} -Wno-extra-semi -Wno-unused-parameter
+    )
+    target_include_directories(solc_opt_ossfuzz PRIVATE /usr/include/antlr4-runtime)
+    target_link_libraries(solc_opt_ossfuzz PRIVATE libsolc evmasm antlr4-runtime)
     set_target_properties(solc_opt_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
 
-    add_executable(solc_noopt_ossfuzz solc_noopt_ossfuzz.cpp ../fuzzer_common.cpp)
-    target_link_libraries(solc_noopt_ossfuzz PRIVATE libsolc evmasm)
+    add_executable(solc_noopt_ossfuzz
+            solc_noopt_ossfuzz.cpp
+            ../fuzzer_common.cpp
+            ../../TestCaseReader.cpp
+            SolidityLexer.cpp
+            SolidityParser.cpp
+    )
+    target_compile_options(solc_noopt_ossfuzz
+            PUBLIC
+            ${COMPILE_OPTIONS} -Wno-extra-semi -Wno-unused-parameter
+    )
+    target_include_directories(solc_noopt_ossfuzz PRIVATE /usr/include/antlr4-runtime)
+    target_link_libraries(solc_noopt_ossfuzz PRIVATE libsolc evmasm antlr4-runtime)
     set_target_properties(solc_noopt_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
 
     add_executable(const_opt_ossfuzz const_opt_ossfuzz.cpp ../fuzzer_common.cpp)
@@ -49,6 +77,7 @@ if (OSSFUZZ)
             protobuf.a
     )
     set_target_properties(yul_proto_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
+    target_compile_options(yul_proto_ossfuzz PUBLIC ${COMPILE_OPTIONS} -Wno-sign-conversion)
 
     add_executable(yul_proto_diff_ossfuzz yulProto_diff_ossfuzz.cpp yulFuzzerCommon.cpp protoToYul.cpp yulProto.pb.cc)
     target_include_directories(yul_proto_diff_ossfuzz PRIVATE /usr/include/libprotobuf-mutator)
@@ -59,6 +88,24 @@ if (OSSFUZZ)
             protobuf.a
     )
     set_target_properties(yul_proto_diff_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
+    target_compile_options(yul_proto_diff_ossfuzz PUBLIC ${COMPILE_OPTIONS} -Wno-sign-conversion)
+
+    add_executable(yul_proto_diff_custom_mutate_ossfuzz
+            yulProto_diff_ossfuzz.cpp
+            yulFuzzerCommon.cpp
+            protoToYul.cpp
+            yulProto.pb.cc
+            protomutators/YulProtoMutator.cpp
+)
+    target_include_directories(yul_proto_diff_custom_mutate_ossfuzz PRIVATE /usr/include/libprotobuf-mutator)
+    target_link_libraries(yul_proto_diff_custom_mutate_ossfuzz PRIVATE yul
+            yulInterpreter
+            protobuf-mutator-libfuzzer.a
+            protobuf-mutator.a
+            protobuf.a
+)
+    set_target_properties(yul_proto_diff_custom_mutate_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
+    target_compile_options(yul_proto_diff_custom_mutate_ossfuzz PUBLIC ${COMPILE_OPTIONS} -Wno-sign-conversion)
 
     add_executable(abiv2_proto_ossfuzz
             ../../EVMHost.cpp
@@ -78,6 +125,7 @@ if (OSSFUZZ)
             protobuf.a
     )
     set_target_properties(abiv2_proto_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
+    target_compile_options(abiv2_proto_ossfuzz PUBLIC ${COMPILE_OPTIONS} -Wno-sign-conversion)
 
     add_executable(sol_proto_ossfuzz
             solProtoFuzzer.cpp
@@ -97,6 +145,7 @@ if (OSSFUZZ)
             protobuf.a
     )
     set_target_properties(sol_proto_ossfuzz PROPERTIES LINK_FLAGS ${LIB_FUZZING_ENGINE})
+    target_compile_options(sol_proto_ossfuzz PUBLIC ${COMPILE_OPTIONS} -Wno-sign-conversion)
 else()
     add_library(solc_opt_ossfuzz
             solc_opt_ossfuzz.cpp

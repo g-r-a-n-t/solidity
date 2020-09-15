@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2015
@@ -25,6 +26,8 @@
 #include <libsolidity/ast/ASTForward.h>
 #include <libsolidity/ast/ASTEnums.h>
 #include <libsolidity/ast/ExperimentalFeatures.h>
+
+#include <libsolutil/SetOnce.h>
 
 #include <map>
 #include <memory>
@@ -78,6 +81,8 @@ struct StructurallyDocumentedAnnotation
 
 	/// Mapping docstring tag name -> content.
 	std::multimap<std::string, DocTag> docTags;
+	/// contract that @inheritdoc references if it exists
+	ContractDefinition const* inheritdocReference = nullptr;
 };
 
 struct SourceUnitAnnotation: ASTAnnotation
@@ -103,10 +108,10 @@ struct ScopableAnnotation
 	virtual ~ScopableAnnotation() = default;
 
 	/// The scope this declaration resides in. Can be nullptr if it is the global scope.
-	/// Available only after name and type resolution step.
+	/// Filled by the Scoper.
 	ASTNode const* scope = nullptr;
 	/// Pointer to the contract this declaration resides in. Can be nullptr if the current scope
-	/// is not part of a contract. Available only after name and type resolution step.
+	/// is not part of a contract. Filled by the Scoper.
 	ContractDefinition const* contract = nullptr;
 };
 
@@ -136,6 +141,9 @@ struct StructDeclarationAnnotation: TypeDeclarationAnnotation
 	/// recursion immediately raises an error.
 	/// Will be filled in by the DeclarationTypeChecker.
 	std::optional<bool> recursive;
+	/// Whether the struct contains a mapping type, either directly or, indirectly inside another
+	/// struct or an array.
+	std::optional<bool> containsNestedMapping;
 };
 
 struct ContractDefinitionAnnotation: TypeDeclarationAnnotation, StructurallyDocumentedAnnotation
@@ -171,7 +179,7 @@ struct ModifierDefinitionAnnotation: CallableDeclarationAnnotation, Structurally
 {
 };
 
-struct VariableDeclarationAnnotation: DeclarationAnnotation
+struct VariableDeclarationAnnotation: DeclarationAnnotation, StructurallyDocumentedAnnotation
 {
 	/// Type of variable (type of identifier referencing this variable).
 	TypePointer type = nullptr;
@@ -228,9 +236,6 @@ struct UserDefinedTypeNameAnnotation: TypeNameAnnotation
 {
 	/// Referenced declaration, set during reference resolution stage.
 	Declaration const* referencedDeclaration = nullptr;
-	/// Stores a reference to the current contract.
-	/// This is needed because types of base contracts change depending on the context.
-	ContractDefinition const* contractScope = nullptr;
 };
 
 struct ExpressionAnnotation: ASTAnnotation
@@ -250,7 +255,7 @@ struct ExpressionAnnotation: ASTAnnotation
 	bool lValueOfOrdinaryAssignment = false;
 
 	/// Types and - if given - names of arguments if the expr. is a function
-	/// that is called, used for overload resoultion
+	/// that is called, used for overload resolution
 	std::optional<FuncCallArguments> arguments;
 };
 
@@ -279,7 +284,6 @@ struct BinaryOperationAnnotation: ExpressionAnnotation
 
 enum class FunctionCallKind
 {
-	Unset,
 	FunctionCall,
 	TypeConversion,
 	StructConstructorCall
@@ -287,7 +291,7 @@ enum class FunctionCallKind
 
 struct FunctionCallAnnotation: ExpressionAnnotation
 {
-	FunctionCallKind kind = FunctionCallKind::Unset;
+	util::SetOnce<FunctionCallKind> kind;
 	/// If true, this is the external call of a try statement.
 	bool tryCall = false;
 };

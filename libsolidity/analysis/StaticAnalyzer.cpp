@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Federico Bond <federicobond@gmail.com>
  * @date 2016
@@ -155,18 +156,20 @@ bool StaticAnalyzer::visit(VariableDeclaration const& _variable)
 			// This is not a no-op, the entry might pre-exist.
 			m_localVarUseCount[make_pair(_variable.id(), &_variable)] += 0;
 	}
-	else if (_variable.isStateVariable())
+
+	if (_variable.isStateVariable() || _variable.referenceLocation() == VariableDeclaration::Location::Storage)
 	{
-		set<StructDefinition const*> structsSeen;
-		if (structureSizeEstimate(*_variable.type(), structsSeen) >= bigint(1) << 64)
-			m_errorReporter.warning(
-				3408_error,
-				_variable.location(),
-				"Variable covers a large part of storage and thus makes collisions likely. "
-				"Either use mappings or dynamic arrays and allow their size to be increased only "
-				"in small quantities per transaction."
-			);
+		TypePointer varType = _variable.annotation().type;
+		for (Type const* subtype: frontend::oversizedSubtypes(*varType))
+		{
+			string message = "Type " + subtype->toString(true) +
+				" covers a large part of storage and thus makes collisions likely."
+				" Either use mappings or dynamic arrays and allow their size to be increased only"
+				" in small quantities per transaction.";
+			m_errorReporter.warning(7325_error, _variable.typeName().location(), message);
+		}
 	}
+
 	return true;
 }
 
@@ -303,7 +306,7 @@ bool StaticAnalyzer::visit(BinaryOperation const& _operation)
 
 bool StaticAnalyzer::visit(FunctionCall const& _functionCall)
 {
-	if (_functionCall.annotation().kind == FunctionCallKind::FunctionCall)
+	if (*_functionCall.annotation().kind == FunctionCallKind::FunctionCall)
 	{
 		auto functionType = dynamic_cast<FunctionType const*>(_functionCall.expression().annotation().type);
 		solAssert(functionType, "");
@@ -322,6 +325,7 @@ bool StaticAnalyzer::visit(FunctionCall const& _functionCall)
 						);
 		}
 		if (
+			m_currentContract &&
 			m_currentContract->isLibrary() &&
 			functionType->kind() == FunctionType::Kind::DelegateCall &&
 			functionType->declaration().scope() == m_currentContract
@@ -337,35 +341,4 @@ bool StaticAnalyzer::visit(FunctionCall const& _functionCall)
 			);
 	}
 	return true;
-}
-
-bigint StaticAnalyzer::structureSizeEstimate(Type const& _type, set<StructDefinition const*>& _structsSeen)
-{
-	switch (_type.category())
-	{
-	case Type::Category::Array:
-	{
-		auto const& t = dynamic_cast<ArrayType const&>(_type);
-		return structureSizeEstimate(*t.baseType(), _structsSeen) * (t.isDynamicallySized() ? 1 : t.length());
-	}
-	case Type::Category::Struct:
-	{
-		auto const& t = dynamic_cast<StructType const&>(_type);
-		bigint size = 1;
-		if (!_structsSeen.count(&t.structDefinition()))
-		{
-			_structsSeen.insert(&t.structDefinition());
-			for (auto const& m: t.members(nullptr))
-				size += structureSizeEstimate(*m.type, _structsSeen);
-		}
-		return size;
-	}
-	case Type::Category::Mapping:
-	{
-		return structureSizeEstimate(*dynamic_cast<MappingType const&>(_type).valueType(), _structsSeen);
-	}
-	default:
-		break;
-	}
-	return bigint(1);
 }

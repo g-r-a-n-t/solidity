@@ -127,9 +127,13 @@ add_library(yul
 	optimiser/NameDispenser.h
 	optimiser/NameDisplacer.cpp
 	optimiser/NameDisplacer.h
+	optimiser/NameSimplifier.cpp
+	optimiser/NameSimplifier.h
 	optimiser/OptimiserStep.h
 	optimiser/OptimizerUtilities.cpp
 	optimiser/OptimizerUtilities.h
+	optimiser/ReasoningBasedSimplifier.cpp
+	optimiser/ReasoningBasedSimplifier.h
 	optimiser/RedundantAssignEliminator.cpp
 	optimiser/RedundantAssignEliminator.h
 	optimiser/Rematerialiser.cpp
@@ -156,6 +160,9 @@ add_library(yul
 	optimiser/SyntacticalEquality.h
 	optimiser/TypeInfo.cpp
 	optimiser/TypeInfo.h
+	optimiser/UnusedFunctionParameterPruner.cpp
+	optimiser/UnusedFunctionParameterPruner.h
+	optimiser/UnusedFunctionsCommon.h
 	optimiser/UnusedPruner.cpp
 	optimiser/UnusedPruner.h
 	optimiser/VarDeclInitializer.cpp
@@ -163,4 +170,5 @@ add_library(yul
 	optimiser/VarNameCleaner.cpp
 	optimiser/VarNameCleaner.h
 )
-target_link_libraries(yul PUBLIC evmasm solutil langutil)
+
+target_link_libraries(yul PUBLIC evmasm solutil langutil smtutil)

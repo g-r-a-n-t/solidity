@@ -2,22 +2,23 @@
 Units and Globally Available Variables
 **************************************
 
-.. index:: wei, finney, szabo, ether
+.. index:: wei, finney, szabo, gwei, ether
 
 Ether Units
 ===========
 
-A literal number can take a suffix of ``wei``, ``finney``, ``szabo`` or ``ether`` to specify a subdenomination of Ether, where Ether numbers without a postfix are assumed to be Wei.
+A literal number can take a suffix of ``wei``, ``gwei`` or ``ether`` to specify a subdenomination of Ether, where Ether numbers without a postfix are assumed to be Wei.
 
 ::
 
     assert(1 wei == 1);
-    assert(1 szabo == 1e12);
-    assert(1 finney == 1e15);
+    assert(1 gwei == 1e9);
     assert(1 ether == 1e18);
 
 The only effect of the subdenomination suffix is a multiplication by a power of ten.
 
+.. note::
+    The denominations ``finney`` and ``szabo`` have been removed in version 0.7.0.
 
 .. index:: time, seconds, minutes, hours, days, weeks, years
 
@@ -47,7 +48,7 @@ These suffixes cannot be applied to variables. For example, if you want to
 interpret a function parameter in days, you can in the following way::
 
     function f(uint start, uint daysAfter) public {
-        if (now >= start + daysAfter * 1 days) {
+        if (block.timestamp >= start + daysAfter * 1 days) {
           // ...
         }
     }
@@ -61,7 +62,7 @@ There are special variables and functions which always exist in the global
 namespace and are mainly used to provide information about the blockchain
 or are general-use utility functions.
 
-.. index:: abi, block, coinbase, difficulty, encode, number, block;number, timestamp, block;timestamp, msg, data, gas, sender, value, now, gas price, origin
+.. index:: abi, block, coinbase, difficulty, encode, number, block;number, timestamp, block;timestamp, msg, data, gas, sender, value, gas price, origin
 
 
 Block and Transaction Properties
@@ -78,7 +79,6 @@ Block and Transaction Properties
 - ``msg.sender`` (``address payable``): sender of the message (current call)
 - ``msg.sig`` (``bytes4``): first four bytes of the calldata (i.e. function identifier)
 - ``msg.value`` (``uint``): number of wei sent with the message
-- ``now`` (``uint``): current block timestamp (alias for ``block.timestamp``)
 - ``tx.gasprice`` (``uint``): gas price of the transaction
 - ``tx.origin`` (``address payable``): sender of the transaction (full call chain)
 
@@ -88,7 +88,7 @@ Block and Transaction Properties
     This includes calls to library functions.
 
 .. note::
-    Do not rely on ``block.timestamp``, ``now`` and ``blockhash`` as a source of randomness,
+    Do not rely on ``block.timestamp`` or ``blockhash`` as a source of randomness,
     unless you know what you are doing.
 
     Both the timestamp and the block hash can be influenced by miners to some degree.
@@ -111,6 +111,9 @@ Block and Transaction Properties
 .. note::
     The function ``gasleft`` was previously known as ``msg.gas``, which was deprecated in
     version 0.4.21 and removed in version 0.5.0.
+
+.. note::
+    In version 0.7.0, the alias ``now`` (for ``block.timestamp``) was removed.
 
 .. index:: abi, encoding, packed
 
@@ -157,6 +160,8 @@ more details on error handling and when to use which function.
 
 .. index:: keccak256, ripemd160, sha256, ecrecover, addmod, mulmod, cryptography,
 
+.. _mathematical-and-cryptographic-functions:
+
 Mathematical and Cryptographic Functions
 ----------------------------------------
 
@@ -190,17 +195,17 @@ Mathematical and Cryptographic Functions
     ``ecrecover`` returns an ``address``, and not an ``address payable``. See :ref:`address payable<address>` for
     conversion, in case you need to transfer funds to the recovered address.
 
-    For further details, read `example usage <https://ethereum.stackexchange.com/q/1777/222>`_.
+    For further details, read `example usage <https://ethereum.stackexchange.com/questions/1777/workflow-on-signing-a-string-with-private-key-followed-by-signature-verificatio>`_.
 
 .. warning::
 
     If you use ``ecrecover``, be aware that a valid signature can be turned into a different valid signature without
     requiring knowledge of the corresponding private key. In the Homestead hard fork, this issue was fixed
-    for _transaction_ signatures (see `EIP-2 <http://eips.ethereum.org/EIPS/eip-2#specification>`_), but
+    for _transaction_ signatures (see `EIP-2 <https://eips.ethereum.org/EIPS/eip-2#specification>`_), but
     the ecrecover function remained unchanged.
 
     This is usually not a problem unless you require signatures to be unique or
-    use them to identify items. OpenZeppelin have a `ECDSA helper library <https://docs.openzeppelin.org/v2.3.0/api/cryptography#ecdsa>`_ that you can use as a wrapper for ``ecrecover`` without this issue.
+    use them to identify items. OpenZeppelin have a `ECDSA helper library <https://docs.openzeppelin.com/contracts/2.x/api/cryptography#ECDSA>`_ that you can use as a wrapper for ``ecrecover`` without this issue.
 
 .. note::
 

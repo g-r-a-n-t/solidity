@@ -6,7 +6,7 @@
 ## You can pass a branch name as argument to this script (which, if no argument is given,
 ## will default to "develop").
 ##
-## If the gien branch is "release", the resulting package will be uplaoded to
+## If the given branch is "release", the resulting package will be uploaded to
 ## ethereum/ethereum PPA, or ethereum/ethereum-dev PPA otherwise.
 ##
 ## The gnupg key for "builds@ethereum.org" has to be present in order to sign
@@ -51,13 +51,13 @@ is_release() {
     [[ "${branch}" = "release" ]] || [[ "${branch}" =~ ^v[0-9]+(\.[0-9])*$ ]]
 }
 
-keyid=70D110489D66E2F6
+keyid=379F4801D622CDCF
 email=builds@ethereum.org
 packagename=solc
 
 static_build_distribution=focal
 
-DISTRIBUTIONS="bionic eoan focal"
+DISTRIBUTIONS="bionic focal groovy"
 
 if is_release
 then
@@ -107,7 +107,7 @@ mv solidity solc
 
 # Fetch jsoncpp dependency
 mkdir -p ./solc/deps/downloads/ 2>/dev/null || true
-wget -O ./solc/deps/downloads/jsoncpp-1.9.2.tar.gz https://github.com/open-source-parsers/jsoncpp/archive/1.9.2.tar.gz
+wget -O ./solc/deps/downloads/jsoncpp-1.9.3.tar.gz https://github.com/open-source-parsers/jsoncpp/archive/1.9.3.tar.gz
 
 # Determine version
 cd solc
@@ -158,7 +158,7 @@ Vcs-Git: git://github.com/ethereum/solidity.git
 Vcs-Browser: https://github.com/ethereum/solidity
 
 Package: solc
-Architecture: any-i386 any-amd64
+Architecture: any-amd64
 Multi-Arch: same
 Depends: \${shlibs:Depends}, \${misc:Depends}
 Conflicts: libethereum (<= 1.2.9)

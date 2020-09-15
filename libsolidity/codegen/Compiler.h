@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2014
@@ -72,6 +73,9 @@ public:
 	evmasm::AssemblyItems const& assemblyItems() const { return m_context.assembly().items(); }
 	/// @returns Assembly items of the runtime compiler context
 	evmasm::AssemblyItems const& runtimeAssemblyItems() const { return m_context.assembly().sub(m_runtimeSub).items(); }
+
+	std::string generatedYulUtilityCode() const { return m_context.generatedYulUtilityCode(); }
+	std::string runtimeGeneratedYulUtilityCode() const { return m_runtimeContext.generatedYulUtilityCode(); }
 
 	/// @returns the entry label of the given function. Might return an AssemblyItem of type
 	/// UndefinedItem if it does not exist yet.

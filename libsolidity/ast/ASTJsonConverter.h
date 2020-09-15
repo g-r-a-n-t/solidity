@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Lefteris <lefteris@ethdev.com>
  * @date 2015
@@ -57,7 +58,7 @@ public:
 	);
 	/// Output the json representation of the AST to _stream.
 	void print(std::ostream& _stream, ASTNode const& _node);
-	Json::Value&& toJson(ASTNode const& _node);
+	Json::Value toJson(ASTNode const& _node);
 	template <class T>
 	Json::Value toJson(std::vector<ASTPointer<T>> const& _nodes)
 	{

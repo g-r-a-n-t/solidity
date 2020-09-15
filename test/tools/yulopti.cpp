@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * Interactive yul optimizer
  */
@@ -35,6 +36,7 @@
 #include <libyul/optimiser/StackCompressor.h>
 #include <libyul/optimiser/VarNameCleaner.h>
 #include <libyul/optimiser/Suite.h>
+#include <libyul/optimiser/ReasoningBasedSimplifier.h>
 
 #include <libyul/backends/evm/EVMDialect.h>
 
@@ -156,7 +158,7 @@ public:
 			map<char, string> const& extraOptions = {
 				{'#', "quit"},
 				{',', "VarNameCleaner"},
-				{';', "StackCompressor"},
+				{';', "StackCompressor"}
 			};
 
 			printUsageBanner(abbreviationMap, extraOptions, 4);

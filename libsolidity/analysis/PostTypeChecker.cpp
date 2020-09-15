@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 
 #include <libsolidity/analysis/PostTypeChecker.h>
 
@@ -276,7 +277,7 @@ struct EventOutsideEmitChecker: public PostTypeChecker::Checker
 
 	bool visit(FunctionCall const& _functionCall) override
 	{
-		if (_functionCall.annotation().kind != FunctionCallKind::FunctionCall)
+		if (*_functionCall.annotation().kind != FunctionCallKind::FunctionCall)
 			return true;
 
 		if (FunctionTypePointer const functionType = dynamic_cast<FunctionTypePointer const>(_functionCall.expression().annotation().type))

@@ -55,7 +55,7 @@ Please refer to the solc-js repository for instructions.
 
     The commandline executable is named ``solcjs``.
 
-    The comandline options of ``solcjs`` are not compatible with ``solc`` and tools (such as ``geth``)
+    The commandline options of ``solcjs`` are not compatible with ``solc`` and tools (such as ``geth``)
     expecting the behaviour of ``solc`` will not work with ``solcjs``.
 
 Docker
@@ -163,8 +163,13 @@ Homebrew formula directly from Github.
 View
 `solidity.rb commits on Github <https://github.com/ethereum/homebrew-ethereum/commits/master/solidity.rb>`_.
 
-Follow the history links until you have a raw file link of a
-specific commit of ``solidity.rb``.
+Copy the commit hash of the version you want and check it out on your machine.
+
+.. code-block:: bash
+
+    git clone https://github.com/ethereum/homebrew-ethereum.git
+    cd homebrew-ethereum
+    git checkout <your-hash-goes-here>
 
 Install it using ``brew``:
 
@@ -172,7 +177,7 @@ Install it using ``brew``:
 
     brew unlink solidity
     # eg. Install 0.4.8
-    brew install https://raw.githubusercontent.com/ethereum/homebrew-ethereum/77cce03da9f289e5a3ffe579840d3c5dc0a62717/solidity.rb
+    brew install solidity.rb
 
 Gentoo Linux has an `Ethereum overlay <https://overlays.gentoo.org/#ethereum>`_ that contains a solidity package.
 After the overlay is setup, ``solc`` can be installed in x86_64 architectures by:
@@ -205,7 +210,7 @@ The following are dependencies for all builds of Solidity:
 | `cvc4`_ (Optional)                | For use with SMT checker.                             |
 +-----------------------------------+-------------------------------------------------------+
 
-.. _cvc4: http://cvc4.cs.stanford.edu/web/
+.. _cvc4: https://cvc4.cs.stanford.edu/web/
 .. _Git: https://git-scm.com/download
 .. _Boost: https://www.boost.org
 .. _CMake: https://cmake.org/download/
@@ -243,10 +248,10 @@ command-line builds:
 
     sudo xcodebuild -license accept
 
-Our OS X build script uses `the Homebrew <http://brew.sh>`_
+Our OS X build script uses `the Homebrew <https://brew.sh>`_
 package manager for installing external dependencies.
 Here's how to `uninstall Homebrew
-<https://github.com/Homebrew/homebrew/blob/master/share/doc/homebrew/FAQ.md#how-do-i-uninstall-homebrew>`_,
+<https://docs.brew.sh/FAQ#how-do-i-uninstall-homebrew>`_,
 if you ever want to start again from scratch.
 
 Prerequisites - Windows
@@ -313,6 +318,16 @@ you should fork Solidity and add your personal fork as a second remote:
 .. code-block:: bash
 
     git remote add personal git@github.com:[username]/solidity.git
+
+.. note::
+    This method will result in a prerelease build leading to e.g. a flag
+    being set in each bytecode produced by such a compiler.
+    If you want to re-build a released Solidity compiler, then
+    please use the source tarball on the github release page:
+
+    https://github.com/ethereum/solidity/releases/download/v0.X.Y/solidity_0.X.Y.tar.gz
+
+    (not the "Source code" provided by github).
 
 Command-Line Build
 ------------------

@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2014
@@ -38,7 +39,7 @@ using namespace solidity;
 using namespace solidity::frontend;
 
 ASTNode::ASTNode(int64_t _id, SourceLocation _location):
-	m_id(_id),
+	m_id(static_cast<size_t>(_id)),
 	m_location(std::move(_location))
 {
 }
@@ -122,15 +123,9 @@ FunctionDefinition const* ContractDefinition::constructor() const
 	return nullptr;
 }
 
-bool ContractDefinition::constructorIsPublic() const
-{
-	FunctionDefinition const* f = constructor();
-	return !f || f->isPublic();
-}
-
 bool ContractDefinition::canBeDeployed() const
 {
-	return constructorIsPublic() && !abstract() && !isInterface();
+	return !abstract() && !isInterface();
 }
 
 FunctionDefinition const* ContractDefinition::fallbackFunction() const
@@ -213,6 +208,14 @@ vector<pair<util::FixedHash<4>, FunctionTypePointer>> const& ContractDefinition:
 	});
 }
 
+uint64_t ContractDefinition::interfaceId() const
+{
+	uint64_t result{0};
+	for (auto const& function: interfaceFunctionList(false))
+		result ^= util::fromBigEndian<uint64_t>(function.first.ref());
+	return result;
+}
+
 TypePointer ContractDefinition::type() const
 {
 	return TypeProvider::typeType(TypeProvider::contract(*this));
@@ -287,11 +290,17 @@ TypeDeclarationAnnotation& EnumDefinition::annotation() const
 	return initAnnotation<TypeDeclarationAnnotation>();
 }
 
-ContractKind FunctionDefinition::inContractKind() const
+bool FunctionDefinition::libraryFunction() const
 {
-	auto contractDef = dynamic_cast<ContractDefinition const*>(scope());
-	solAssert(contractDef, "Enclosing Scope of FunctionDefinition was not set.");
-	return contractDef->contractKind();
+	if (auto const* contractDef = dynamic_cast<ContractDefinition const*>(scope()))
+		return contractDef->isLibrary();
+	return false;
+}
+
+Visibility FunctionDefinition::defaultVisibility() const
+{
+	solAssert(!isConstructor(), "");
+	return isFree() ? Visibility::Internal : Declaration::defaultVisibility();
 }
 
 FunctionTypePointer FunctionDefinition::functionType(bool _internal) const
@@ -337,9 +346,15 @@ TypePointer FunctionDefinition::type() const
 
 TypePointer FunctionDefinition::typeViaContractName() const
 {
-	if (annotation().contract->isLibrary())
-		return FunctionType(*this).asCallableFunction(true);
-	return TypeProvider::function(*this, FunctionType::Kind::Declaration);
+	if (libraryFunction())
+	{
+		if (isPublic())
+			return FunctionType(*this).asExternallyCallableFunction(true);
+		else
+			return TypeProvider::function(*this, FunctionType::Kind::Internal);
+	}
+	else
+		return TypeProvider::function(*this, FunctionType::Kind::Declaration);
 }
 
 string FunctionDefinition::externalSignature() const
@@ -367,9 +382,11 @@ FunctionDefinition const& FunctionDefinition::resolveVirtual(
 	if (_searchStart == nullptr && !virtualSemantics())
 		return *this;
 
-	solAssert(!dynamic_cast<ContractDefinition const&>(*scope()).isLibrary(), "");
+	solAssert(!isFree(), "");
+	solAssert(isOrdinary(), "");
+	solAssert(!libraryFunction(), "");
 
-	FunctionType const* functionType = TypeProvider::function(*this)->asCallableFunction(false);
+	FunctionType const* functionType = TypeProvider::function(*this)->asExternallyCallableFunction(false);
 
 	for (ContractDefinition const* c: _mostDerivedContract.annotation().linearizedBaseContracts)
 	{
@@ -380,7 +397,7 @@ FunctionDefinition const& FunctionDefinition::resolveVirtual(
 			if (
 				function->name() == name() &&
 				!function->isConstructor() &&
-				FunctionType(*function).asCallableFunction(false)->hasEqualParameterTypes(*functionType)
+				FunctionType(*function).asExternallyCallableFunction(false)->hasEqualParameterTypes(*functionType)
 			)
 				return *function;
 	}
@@ -486,12 +503,7 @@ DeclarationAnnotation& Declaration::annotation() const
 bool VariableDeclaration::isLValue() const
 {
 	// Constant declared variables are Read-Only
-	if (isConstant())
-		return false;
-	// External function arguments of reference type are Read-Only
-	if (isExternalCallableParameter() && dynamic_cast<ReferenceType const*>(type()))
-		return false;
-	return true;
+	return !isConstant();
 }
 
 bool VariableDeclaration::isLocalVariable() const
@@ -587,14 +599,22 @@ bool VariableDeclaration::isInternalCallableParameter() const
 	return false;
 }
 
+bool VariableDeclaration::isConstructorParameter() const
+{
+	if (!isCallableOrCatchParameter())
+		return false;
+	if (auto const* function = dynamic_cast<FunctionDefinition const*>(scope()))
+		return function->isConstructor();
+	return false;
+}
+
 bool VariableDeclaration::isLibraryFunctionParameter() const
 {
 	if (!isCallableOrCatchParameter())
 		return false;
 	if (auto const* funDef = dynamic_cast<FunctionDefinition const*>(scope()))
-		return dynamic_cast<ContractDefinition const&>(*funDef->scope()).isLibrary();
-	else
-		return false;
+		return funDef->libraryFunction();
+	return false;
 }
 
 bool VariableDeclaration::isEventParameter() const
@@ -604,9 +624,8 @@ bool VariableDeclaration::isEventParameter() const
 
 bool VariableDeclaration::hasReferenceOrMappingType() const
 {
-	solAssert(typeName(), "");
-	solAssert(typeName()->annotation().type, "Can only be called after reference resolution");
-	Type const* type = typeName()->annotation().type;
+	solAssert(typeName().annotation().type, "Can only be called after reference resolution");
+	Type const* type = typeName().annotation().type;
 	return type->category() == Type::Category::Mapping || dynamic_cast<ReferenceType const*>(type);
 }
 
@@ -616,38 +635,24 @@ set<VariableDeclaration::Location> VariableDeclaration::allowedDataLocations() c
 
 	if (!hasReferenceOrMappingType() || isStateVariable() || isEventParameter())
 		return set<Location>{ Location::Unspecified };
-	else if (isExternalCallableParameter())
-	{
-		set<Location> locations{ Location::CallData };
-		if (isLibraryFunctionParameter())
-			locations.insert(Location::Storage);
-		return locations;
-	}
 	else if (isCallableOrCatchParameter())
 	{
 		set<Location> locations{ Location::Memory };
-		if (isInternalCallableParameter() || isLibraryFunctionParameter() || isTryCatchParameter())
+		if (
+			isConstructorParameter() ||
+			isInternalCallableParameter() ||
+			isLibraryFunctionParameter() ||
+			isTryCatchParameter()
+		)
 			locations.insert(Location::Storage);
+		if (!isTryCatchParameter() && !isConstructorParameter())
+			locations.insert(Location::CallData);
+
 		return locations;
 	}
 	else if (isLocalVariable())
-	{
-		solAssert(typeName(), "");
-		auto dataLocations = [](TypePointer _type, auto&& _recursion) -> set<Location> {
-			solAssert(_type, "Can only be called after reference resolution");
-			switch (_type->category())
-			{
-				case Type::Category::Array:
-					return _recursion(dynamic_cast<ArrayType const*>(_type)->baseType(), _recursion);
-				case Type::Category::Mapping:
-					return set<Location>{ Location::Storage };
-				default:
-					//  TODO: add Location::Calldata once implemented for local variables.
-					return set<Location>{ Location::Memory, Location::Storage };
-			}
-		};
-		return dataLocations(typeName()->annotation().type, dataLocations);
-	}
+		// Further restrictions will be imposed later on.
+		return set<Location>{ Location::Memory, Location::Storage, Location::CallData };
 	else
 		// Struct members etc.
 		return set<Location>{ Location::Unspecified };

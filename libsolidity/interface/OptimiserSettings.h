@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Alex Beregszaszi
  * @date 2017
@@ -31,7 +32,7 @@ namespace solidity::frontend
 struct OptimiserSettings
 {
 	static char constexpr DefaultYulOptimiserSteps[] =
-		"dhfoDgvulfnTUtnIf"            // None of these can make stack problems worse
+		"NdhfoDgvulfnTUtnIf"            // None of these can make stack problems worse
 		"["
 			"xarrscLM"                 // Turn into SSA and simplify
 			"cCTUtTOntnfDIul"          // Perform structural simplification
@@ -40,13 +41,13 @@ struct OptimiserSettings
 
 			// should have good "compilability" property here.
 
-			"eul"                      // Run functional expression inliner
+			"Tpeul"                    // Run functional expression inliner
 			"xarulrul"                 // Prune a bit more in SSA
 			"xarrcL"                   // Turn into SSA again and simplify
 			"gvif"                     // Run full inliner
 			"CTUcarrLsTOtfDncarrIulc"  // SSA plus simplify
 		"]"
-		"jmuljuljul VcTOcul jmul";     // Make source short and pretty
+		"jmuljuljul VcTOcul jmulN";     // Make source short and pretty
 
 	/// No optimisations at all - not recommended.
 	static OptimiserSettings none()

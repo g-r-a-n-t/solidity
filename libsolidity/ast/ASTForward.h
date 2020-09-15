@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2014
@@ -37,6 +38,7 @@ namespace solidity::frontend
 {
 
 class ASTNode;
+class ScopeOpener;
 class SourceUnit;
 class PragmaDirective;
 class ImportDirective;

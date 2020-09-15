@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2014
@@ -88,7 +89,7 @@ public:
 	virtual ~ASTNode() {}
 
 	/// @returns an identifier of this AST node that is unique for a single compilation run.
-	int64_t id() const { return m_id; }
+	int64_t id() const { return int64_t(m_id); }
 
 	virtual void accept(ASTVisitor& _visitor) = 0;
 	virtual void accept(ASTConstVisitor& _visitor) const = 0;
@@ -152,9 +153,18 @@ std::vector<T const*> ASTNode::filteredNodes(std::vector<ASTPointer<ASTNode>> co
 }
 
 /**
+ * Abstract marker class that specifies that this AST node opens a scope.
+ */
+class ScopeOpener
+{
+public:
+	virtual ~ScopeOpener() = default;
+};
+
+/**
  * Source unit containing import directives and contract definitions.
  */
-class SourceUnit: public ASTNode
+class SourceUnit: public ASTNode, public ScopeOpener
 {
 public:
 	SourceUnit(
@@ -454,7 +464,7 @@ protected:
  * document order. It first visits all struct declarations, then all variable declarations and
  * finally all function declarations.
  */
-class ContractDefinition: public Declaration, public StructurallyDocumented
+class ContractDefinition: public Declaration, public StructurallyDocumented, public ScopeOpener
 {
 public:
 	ContractDefinition(
@@ -499,14 +509,14 @@ public:
 	/// as intended for use by the ABI.
 	std::map<util::FixedHash<4>, FunctionTypePointer> interfaceFunctions(bool _includeInheritedFunctions = true) const;
 	std::vector<std::pair<util::FixedHash<4>, FunctionTypePointer>> const& interfaceFunctionList(bool _includeInheritedFunctions = true) const;
+	/// @returns the EIP-165 compatible interface identifier. This will exclude inherited functions.
+	uint64_t interfaceId() const;
 
 	/// @returns a list of all declarations in this contract
 	std::vector<Declaration const*> declarations() const { return filteredNodes<Declaration>(m_subNodes); }
 
 	/// Returns the constructor or nullptr if no constructor was specified.
 	FunctionDefinition const* constructor() const;
-	/// @returns true iff the constructor of this contract is public (or non-existing).
-	bool constructorIsPublic() const;
 	/// @returns true iff the contract can be deployed, i.e. is not abstract and has a
 	/// public constructor.
 	/// Should only be called after the type checker has run.
@@ -594,7 +604,7 @@ private:
 	ASTPointer<TypeName> m_typeName;
 };
 
-class StructDefinition: public Declaration
+class StructDefinition: public Declaration, public ScopeOpener
 {
 public:
 	StructDefinition(
@@ -621,7 +631,7 @@ private:
 	std::vector<ASTPointer<VariableDeclaration>> m_members;
 };
 
-class EnumDefinition: public Declaration
+class EnumDefinition: public Declaration, public ScopeOpener
 {
 public:
 	EnumDefinition(
@@ -766,7 +776,7 @@ protected:
 	std::vector<ASTPointer<UserDefinedTypeName>> m_overrides;
 };
 
-class FunctionDefinition: public CallableDeclaration, public StructurallyDocumented, public ImplementationOptional
+class FunctionDefinition: public CallableDeclaration, public StructurallyDocumented, public ImplementationOptional, public ScopeOpener
 {
 public:
 	FunctionDefinition(
@@ -775,6 +785,7 @@ public:
 		ASTPointer<ASTString> const& _name,
 		Visibility _visibility,
 		StateMutability _stateMutability,
+		bool _free,
 		Token _kind,
 		bool _isVirtual,
 		ASTPointer<OverrideSpecifier> const& _overrides,
@@ -788,34 +799,40 @@ public:
 		StructurallyDocumented(_documentation),
 		ImplementationOptional(_body != nullptr),
 		m_stateMutability(_stateMutability),
+		m_free(_free),
 		m_kind(_kind),
 		m_functionModifiers(std::move(_modifiers)),
 		m_body(_body)
 	{
 		solAssert(_kind == Token::Constructor || _kind == Token::Function || _kind == Token::Fallback || _kind == Token::Receive, "");
+		solAssert(isOrdinary() == !name().empty(), "");
 	}
 
 	void accept(ASTVisitor& _visitor) override;
 	void accept(ASTConstVisitor& _visitor) const override;
 
 	StateMutability stateMutability() const { return m_stateMutability; }
+	bool libraryFunction() const;
 	bool isOrdinary() const { return m_kind == Token::Function; }
 	bool isConstructor() const { return m_kind == Token::Constructor; }
 	bool isFallback() const { return m_kind == Token::Fallback; }
 	bool isReceive() const { return m_kind == Token::Receive; }
+	bool isFree() const { return m_free; }
 	Token kind() const { return m_kind; }
 	bool isPayable() const { return m_stateMutability == StateMutability::Payable; }
 	std::vector<ASTPointer<ModifierInvocation>> const& modifiers() const { return m_functionModifiers; }
 	Block const& body() const { solAssert(m_body, ""); return *m_body; }
+	Visibility defaultVisibility() const override;
 	bool isVisibleInContract() const override
 	{
-		return Declaration::isVisibleInContract() && isOrdinary();
+		return isOrdinary() && Declaration::isVisibleInContract();
 	}
 	bool isVisibleViaContractTypeAccess() const override
 	{
-		return visibility() >= Visibility::Public;
+		solAssert(!isFree(), "");
+		return isOrdinary() && visibility() >= Visibility::Public;
 	}
-	bool isPartOfExternalInterface() const override { return isPublic() && isOrdinary(); }
+	bool isPartOfExternalInterface() const override { return isOrdinary() && isPublic(); }
 
 	/// @returns the external signature of the function
 	/// That consists of the name of the function followed by the types of the
@@ -824,8 +841,6 @@ public:
 
 	/// @returns the external identifier of this function (the hash of the signature) as a hex string.
 	std::string externalIdentifierHex() const;
-
-	ContractKind inContractKind() const;
 
 	TypePointer type() const override;
 	TypePointer typeViaContractName() const override;
@@ -850,6 +865,7 @@ public:
 
 private:
 	StateMutability m_stateMutability;
+	bool m_free;
 	Token const m_kind;
 	std::vector<ASTPointer<ModifierInvocation>> m_functionModifiers;
 	ASTPointer<Block> m_body;
@@ -859,7 +875,7 @@ private:
  * Declaration of a variable. This can be used in various places, e.g. in function parameter
  * lists, struct definitions and even function bodies.
  */
-class VariableDeclaration: public Declaration
+class VariableDeclaration: public Declaration, public StructurallyDocumented
 {
 public:
 	enum Location { Unspecified, Storage, Memory, CallData };
@@ -882,6 +898,7 @@ public:
 		ASTPointer<ASTString> const& _name,
 		ASTPointer<Expression> _value,
 		Visibility _visibility,
+		ASTPointer<StructuredDocumentation> const _documentation = nullptr,
 		bool _isStateVar = false,
 		bool _isIndexed = false,
 		Mutability _mutability = Mutability::Mutable,
@@ -889,19 +906,23 @@ public:
 		Location _referenceLocation = Location::Unspecified
 	):
 		Declaration(_id, _location, _name, _visibility),
+		StructurallyDocumented(std::move(_documentation)),
 		m_typeName(std::move(_type)),
 		m_value(std::move(_value)),
 		m_isStateVariable(_isStateVar),
 		m_isIndexed(_isIndexed),
 		m_mutability(_mutability),
 		m_overrides(std::move(_overrides)),
-		m_location(_referenceLocation) {}
+		m_location(_referenceLocation)
+	{
+		solAssert(m_typeName, "");
+	}
 
 
 	void accept(ASTVisitor& _visitor) override;
 	void accept(ASTConstVisitor& _visitor) const override;
 
-	TypeName* typeName() const { return m_typeName.get(); }
+	TypeName const& typeName() const { return *m_typeName; }
 	ASTPointer<Expression> const& value() const { return m_value; }
 
 	bool isLValue() const override;
@@ -927,6 +948,8 @@ public:
 	/// @returns true if this variable is a parameter or return parameter of an internal function
 	/// or a function type of internal visibility.
 	bool isInternalCallableParameter() const;
+	/// @returns true if this variable is the parameter of a constructor.
+	bool isConstructorParameter() const;
 	/// @returns true iff this variable is a parameter(or return parameter of a library function
 	bool isLibraryFunctionParameter() const;
 	/// @returns true if the type of the variable does not need to be specified, i.e. it is declared
@@ -962,7 +985,7 @@ protected:
 	Visibility defaultVisibility() const override { return Visibility::Internal; }
 
 private:
-	ASTPointer<TypeName> m_typeName; ///< can be empty ("var")
+	ASTPointer<TypeName> m_typeName;
 	/// Initially assigned value, can be missing. For local variables, this is stored inside
 	/// VariableDeclarationStatement and not here.
 	ASTPointer<Expression> m_value;
@@ -977,7 +1000,7 @@ private:
 /**
  * Definition of a function modifier.
  */
-class ModifierDefinition: public CallableDeclaration, public StructurallyDocumented, public ImplementationOptional
+class ModifierDefinition: public CallableDeclaration, public StructurallyDocumented, public ImplementationOptional, public ScopeOpener
 {
 public:
 	ModifierDefinition(
@@ -1049,7 +1072,7 @@ private:
 /**
  * Definition of a (loggable) event.
  */
-class EventDefinition: public CallableDeclaration, public StructurallyDocumented
+class EventDefinition: public CallableDeclaration, public StructurallyDocumented, public ScopeOpener
 {
 public:
 	EventDefinition(
@@ -1187,7 +1210,7 @@ private:
 /**
  * A literal function type. Its source form is "function (paramType1, paramType2) internal / external returns (retType1, retType2)"
  */
-class FunctionTypeName: public TypeName
+class FunctionTypeName: public TypeName, public ScopeOpener
 {
 public:
 	FunctionTypeName(
@@ -1322,7 +1345,7 @@ private:
 /**
  * Brace-enclosed block containing zero or more statements.
  */
-class Block: public Statement, public Scopable
+class Block: public Statement, public Scopable, public ScopeOpener
 {
 public:
 	Block(
@@ -1399,7 +1422,7 @@ private:
  * unsuccessful cases.
  * Names are only allowed for the unsuccessful cases.
  */
-class TryCatchClause: public ASTNode, public Scopable
+class TryCatchClause: public ASTNode, public Scopable, public ScopeOpener
 {
 public:
 	TryCatchClause(
@@ -1514,7 +1537,7 @@ private:
 /**
  * For loop statement
  */
-class ForStatement: public BreakableStatement, public Scopable
+class ForStatement: public BreakableStatement, public Scopable, public ScopeOpener
 {
 public:
 	ForStatement(
@@ -2083,8 +2106,7 @@ public:
 	{
 		None = static_cast<int>(Token::Illegal),
 		Wei = static_cast<int>(Token::SubWei),
-		Szabo = static_cast<int>(Token::SubSzabo),
-		Finney = static_cast<int>(Token::SubFinney),
+		Gwei = static_cast<int>(Token::SubGwei),
 		Ether = static_cast<int>(Token::SubEther),
 		Second = static_cast<int>(Token::SubSecond),
 		Minute = static_cast<int>(Token::SubMinute),

@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Alex Beregszaszi
  * @date 2016
@@ -28,8 +29,10 @@
 #include <libyul/optimiser/Suite.h>
 #include <liblangutil/SourceReferenceFormatter.h>
 #include <libevmasm/Instruction.h>
+#include <libsmtutil/Exceptions.h>
 #include <libsolutil/JSON.h>
 #include <libsolutil/Keccak256.h>
+#include <libsolutil/CommonData.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -109,7 +112,8 @@ Json::Value formatErrorWithException(
 	bool const& _warning,
 	string const& _type,
 	string const& _component,
-	string const& _message
+	string const& _message,
+	optional<ErrorId> _errorId = nullopt
 )
 {
 	string message;
@@ -120,7 +124,7 @@ Json::Value formatErrorWithException(
 	else
 		message = _message;
 
-	return formatError(
+	Json::Value error = formatError(
 		_warning,
 		_type,
 		_component,
@@ -129,6 +133,11 @@ Json::Value formatErrorWithException(
 		formatSourceLocation(boost::get_error_info<errinfo_sourceLocation>(_exception)),
 		formatSecondarySourceLocation(boost::get_error_info<errinfo_secondarySourceLocation>(_exception))
 	);
+
+	if (_errorId)
+		error["errorCode"] = to_string(_errorId.value().error);
+
+	return error;
 }
 
 map<string, set<string>> requestedContractNames(Json::Value const& _outputSelection)
@@ -176,7 +185,7 @@ bool isArtifactRequested(Json::Value const& _outputSelection, string const& _art
 }
 
 ///
-/// @a _outputSelection is a JSON object containining a two-level hashmap, where the first level is the filename,
+/// @a _outputSelection is a JSON object containing a two-level hashmap, where the first level is the filename,
 /// the second level is the contract name and the value is an array of artifact names to be requested for that contract.
 /// @a _file is the current file
 /// @a _contract is the current contract
@@ -221,28 +230,52 @@ bool isArtifactRequested(Json::Value const& _outputSelection, string const& _fil
 	return false;
 }
 
+/// @returns all artifact names of the EVM object, either for creation or deploy time.
+vector<string> evmObjectComponents(string const& _objectKind)
+{
+	solAssert(_objectKind == "bytecode" || _objectKind == "deployedBytecode", "");
+	vector<string> components{"", ".object", ".opcodes", ".sourceMap", ".generatedSources", ".linkReferences"};
+	if (_objectKind == "deployedBytecode")
+		components.push_back(".immutableReferences");
+	return util::applyMap(components, [&](auto const& _s) { return "evm." + _objectKind + _s; });
+}
+
 /// @returns true if any binary was requested, i.e. we actually have to perform compilation.
 bool isBinaryRequested(Json::Value const& _outputSelection)
 {
 	if (!_outputSelection.isObject())
 		return false;
 
-	// This does not inculde "evm.methodIdentifiers" on purpose!
-	static vector<string> const outputsThatRequireBinaries{
+	// This does not include "evm.methodIdentifiers" on purpose!
+	static vector<string> const outputsThatRequireBinaries = vector<string>{
 		"*",
 		"ir", "irOptimized",
 		"wast", "wasm", "ewasm.wast", "ewasm.wasm",
-		"evm.deployedBytecode", "evm.deployedBytecode.object", "evm.deployedBytecode.opcodes",
-		"evm.deployedBytecode.sourceMap", "evm.deployedBytecode.linkReferences",
-		"evm.deployedBytecode.immutableReferences",
-		"evm.bytecode", "evm.bytecode.object", "evm.bytecode.opcodes", "evm.bytecode.sourceMap",
-		"evm.bytecode.linkReferences",
 		"evm.gasEstimates", "evm.legacyAssembly", "evm.assembly"
-	};
+	} + evmObjectComponents("bytecode") + evmObjectComponents("deployedBytecode");
 
 	for (auto const& fileRequests: _outputSelection)
 		for (auto const& requests: fileRequests)
 			for (auto const& output: outputsThatRequireBinaries)
+				if (isArtifactRequested(requests, output, false))
+					return true;
+	return false;
+}
+
+/// @returns true if EVM bytecode was requested, i.e. we have to run the old code generator.
+bool isEvmBytecodeRequested(Json::Value const& _outputSelection)
+{
+	if (!_outputSelection.isObject())
+		return false;
+
+	static vector<string> const outputsThatRequireEvmBinaries = vector<string>{
+		"*",
+		"evm.gasEstimates", "evm.legacyAssembly", "evm.assembly"
+	} + evmObjectComponents("bytecode") + evmObjectComponents("deployedBytecode");
+
+	for (auto const& fileRequests: _outputSelection)
+		for (auto const& requests: fileRequests)
+			for (auto const& output: outputsThatRequireEvmBinaries)
 				if (isArtifactRequested(requests, output, false))
 					return true;
 	return false;
@@ -331,7 +364,12 @@ Json::Value formatImmutableReferences(map<u256, pair<string, vector<size_t>>> co
 	return ret;
 }
 
-Json::Value collectEVMObject(evmasm::LinkerObject const& _object, string const* _sourceMap, bool _runtimeObject)
+Json::Value collectEVMObject(
+	evmasm::LinkerObject const& _object,
+	string const* _sourceMap,
+	Json::Value _generatedSources,
+	bool _runtimeObject
+)
 {
 	Json::Value output = Json::objectValue;
 	output["object"] = _object.toHex();
@@ -340,6 +378,7 @@ Json::Value collectEVMObject(evmasm::LinkerObject const& _object, string const* 
 	output["linkReferences"] = formatLinkReferences(_object.linkReferences);
 	if (_runtimeObject)
 		output["immutableReferences"] = formatImmutableReferences(_object.immutableReferences);
+	output["generatedSources"] = move(_generatedSources);
 	return output;
 }
 
@@ -831,8 +870,8 @@ Json::Value StandardCompiler::compileSolidity(StandardCompiler::InputsAndSetting
 	compilerStack.setMetadataHash(_inputsAndSettings.metadataHash);
 	compilerStack.setRequestedContractNames(requestedContractNames(_inputsAndSettings.outputSelection));
 
+	compilerStack.enableEvmBytecodeGeneration(isEvmBytecodeRequested(_inputsAndSettings.outputSelection));
 	compilerStack.enableIRGeneration(isIRRequested(_inputsAndSettings.outputSelection));
-
 	compilerStack.enableEwasmGeneration(isEwasmRequested(_inputsAndSettings.outputSelection));
 
 	Json::Value errors = std::move(_inputsAndSettings.errors);
@@ -855,7 +894,8 @@ Json::Value StandardCompiler::compileSolidity(StandardCompiler::InputsAndSetting
 				err.type() == Error::Type::Warning,
 				err.typeName(),
 				"general",
-				""
+				"",
+				err.errorId()
 			));
 		}
 	}
@@ -918,6 +958,16 @@ Json::Value StandardCompiler::compileSolidity(StandardCompiler::InputsAndSetting
 			"YulException",
 			"general",
 			"Yul exception"
+		));
+	}
+	catch (smtutil::SMTLogicError const& _exception)
+	{
+		errors.append(formatErrorWithException(
+			_exception,
+			false,
+			"SMTLogicException",
+			"general",
+			"SMT logic exception"
 		));
 	}
 	catch (util::Exception const& _exception)
@@ -1030,12 +1080,13 @@ Json::Value StandardCompiler::compileSolidity(StandardCompiler::InputsAndSetting
 			_inputsAndSettings.outputSelection,
 			file,
 			name,
-			{ "evm.bytecode", "evm.bytecode.object", "evm.bytecode.opcodes", "evm.bytecode.sourceMap", "evm.bytecode.linkReferences" },
+			evmObjectComponents("bytecode"),
 			wildcardMatchesExperimental
 		))
 			evmData["bytecode"] = collectEVMObject(
 				compilerStack.object(contractName),
 				compilerStack.sourceMapping(contractName),
+				compilerStack.generatedSources(contractName),
 				false
 			);
 
@@ -1043,12 +1094,13 @@ Json::Value StandardCompiler::compileSolidity(StandardCompiler::InputsAndSetting
 			_inputsAndSettings.outputSelection,
 			file,
 			name,
-			{ "evm.deployedBytecode", "evm.deployedBytecode.object", "evm.deployedBytecode.opcodes", "evm.deployedBytecode.sourceMap", "evm.deployedBytecode.linkReferences", "evm.deployedBytecode.immutableReferences" },
+			evmObjectComponents("deployedBytecode"),
 			wildcardMatchesExperimental
 		))
 			evmData["deployedBytecode"] = collectEVMObject(
 				compilerStack.runtimeObject(contractName),
 				compilerStack.runtimeSourceMapping(contractName),
+				compilerStack.generatedSources(contractName, true),
 				true
 			);
 
@@ -1127,16 +1179,24 @@ Json::Value StandardCompiler::compileYul(InputsAndSettings _inputsAndSettings)
 
 	stack.optimize();
 
-	MachineAssemblyObject object = stack.assemble(AssemblyStack::Machine::EVM);
+	MachineAssemblyObject object;
+	MachineAssemblyObject runtimeObject;
+	tie(object, runtimeObject) = stack.assembleAndGuessRuntime();
 
-	if (isArtifactRequested(
-		_inputsAndSettings.outputSelection,
-		sourceName,
-		contractName,
-		{ "evm.bytecode", "evm.bytecode.object", "evm.bytecode.opcodes", "evm.bytecode.sourceMap", "evm.bytecode.linkReferences" },
-		wildcardMatchesExperimental
-	))
-		output["contracts"][sourceName][contractName]["evm"]["bytecode"] = collectEVMObject(*object.bytecode, object.sourceMappings.get(), false);
+	for (string const& objectKind: vector<string>{"bytecode", "deployedBytecode"})
+		if (isArtifactRequested(
+			_inputsAndSettings.outputSelection,
+			sourceName,
+			contractName,
+			evmObjectComponents(objectKind),
+			wildcardMatchesExperimental
+		))
+		{
+			MachineAssemblyObject const& o = objectKind == "bytecode" ? object : runtimeObject;
+			if (o.bytecode)
+				output["contracts"][sourceName][contractName]["evm"][objectKind] =
+					collectEVMObject(*o.bytecode, o.sourceMappings.get(), Json::arrayValue, false);
+		}
 
 	if (isArtifactRequested(_inputsAndSettings.outputSelection, sourceName, contractName, "irOptimized", wildcardMatchesExperimental))
 		output["contracts"][sourceName][contractName]["irOptimized"] = stack.print();

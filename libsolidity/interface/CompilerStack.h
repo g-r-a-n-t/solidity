@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @author Gav Wood <g@ethdev.com>
@@ -27,7 +28,8 @@
 #include <libsolidity/interface/OptimiserSettings.h>
 #include <libsolidity/interface/Version.h>
 #include <libsolidity/interface/DebugSettings.h>
-#include <libsolidity/formal/SolverInterface.h>
+
+#include <libsmtutil/SolverInterface.h>
 
 #include <liblangutil/ErrorReporter.h>
 #include <liblangutil/EVMVersion.h>
@@ -163,7 +165,7 @@ public:
 	void setEVMVersion(langutil::EVMVersion _version = langutil::EVMVersion{});
 
 	/// Set which SMT solvers should be enabled.
-	void setSMTSolverChoice(smt::SMTSolverChoice _enabledSolvers);
+	void setSMTSolverChoice(smtutil::SMTSolverChoice _enabledSolvers);
 
 	/// Sets the requested contract names by source.
 	/// If empty, no filtering is performed and every contract
@@ -173,6 +175,9 @@ public:
 	{
 		m_requestedContractNames = _contractNames;
 	}
+
+	/// Enable EVM Bytecode generation. This is enabled by default.
+	void enableEvmBytecodeGeneration(bool _enable = true) { m_generateEvmBytecode = _enable; }
 
 	/// Enable experimental generation of Yul IR code.
 	void enableIRGeneration(bool _enable = true) { m_generateIR = _enable; }
@@ -272,6 +277,10 @@ public:
 	/// @returns runtime contract assembly items
 	evmasm::AssemblyItems const* runtimeAssemblyItems(std::string const& _contractName) const;
 
+	/// @returns an array containing all utility sources generated during compilation.
+	/// Format: [ { name: string, id: number, language: "Yul", contents: string }, ... ]
+	Json::Value generatedSources(std::string const& _contractName, bool _runtime = false) const;
+
 	/// @returns the string that provides a mapping between bytecode and sourcecode or a nullptr
 	/// if the contract does not (yet) have bytecode.
 	std::string const* sourceMapping(std::string const& _contractName) const;
@@ -312,6 +321,9 @@ public:
 	/// @returns the Contract Metadata
 	std::string const& metadata(std::string const& _contractName) const;
 
+	/// @returns the cbor-encoded metadata.
+	bytes cborMetadata(std::string const& _contractName) const;
+
 	/// @returns a JSON representing the estimated gas usage for contract creation, internal and external functions
 	Json::Value gasEstimates(std::string const& _contractName) const;
 
@@ -348,8 +360,10 @@ private:
 		util::LazyInit<Json::Value const> storageLayout;
 		util::LazyInit<Json::Value const> userDocumentation;
 		util::LazyInit<Json::Value const> devDocumentation;
-		mutable std::unique_ptr<std::string const> sourceMapping;
-		mutable std::unique_ptr<std::string const> runtimeSourceMapping;
+		util::LazyInit<Json::Value const> generatedSources;
+		util::LazyInit<Json::Value const> runtimeGeneratedSources;
+		mutable std::optional<std::string const> sourceMapping;
+		mutable std::optional<std::string const> runtimeSourceMapping;
 	};
 
 	/// Loads the missing sources from @a _ast (named @a _path) using the callback
@@ -400,7 +414,7 @@ private:
 	std::string createMetadata(Contract const& _contract) const;
 
 	/// @returns the metadata CBOR for the given serialised metadata JSON.
-	bytes createCBORMetadata(std::string const& _metadata, bool _experimentalMode);
+	bytes createCBORMetadata(Contract const& _contract) const;
 
 	/// @returns the contract ABI as a JSON object.
 	/// This will generate the JSON object and store it in the Contract object if it is not present yet.
@@ -433,10 +447,11 @@ private:
 	OptimiserSettings m_optimiserSettings;
 	RevertStrings m_revertStrings = RevertStrings::Default;
 	langutil::EVMVersion m_evmVersion;
-	smt::SMTSolverChoice m_enabledSMTSolvers;
+	smtutil::SMTSolverChoice m_enabledSMTSolvers;
 	std::map<std::string, std::set<std::string>> m_requestedContractNames;
-	bool m_generateIR;
-	bool m_generateEwasm;
+	bool m_generateEvmBytecode = true;
+	bool m_generateIR = false;
+	bool m_generateEwasm = false;
 	std::map<std::string, util::h160> m_libraries;
 	/// list of path prefix remappings, e.g. mylibrary: github.com/ethereum = /usr/local/ethereum
 	/// "context:prefix=target"

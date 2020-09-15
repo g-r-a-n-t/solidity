@@ -6,6 +6,34 @@
 Functions
 *********
 
+Functions can be defined inside and outside of contracts.
+
+Functions outside of a contract, also called "free functions", always have implicit ``internal``
+:ref:`visibility<visibility-and-getters>`. Their code is included in all contracts
+that call them, similar to internal library functions.
+
+::
+
+    // SPDX-License-Identifier: GPL-3.0
+    pragma solidity >0.7.0 <0.8.0;
+
+    function sum(uint[] memory _arr) pure returns (uint s) {
+        for (uint i = 0; i < _arr.length; i++)
+            s += _arr[i];
+    }
+
+    contract ArrayExample {
+        bool found;
+        function f(uint[] memory _arr) public {
+            // This calls the free function internally.
+            // The compiler will add its code to the contract.
+            uint s = sum(_arr);
+            require(s >= 10);
+            found = true;
+        }
+    }
+
+
 .. _function-parameters-return-variables:
 
 Function Parameters and Return Variables
@@ -24,7 +52,7 @@ For example, if you want your contract to accept one kind of external call
 with two integers, you would use something like the following::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     contract Simple {
         uint sum;
@@ -57,7 +85,7 @@ For example, suppose you want to return two results: the sum and the product of
 two integers passed as function parameters, then you use something like::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     contract Simple {
         function arithmetic(uint _a, uint _b)
@@ -76,13 +104,13 @@ are initialized with their :ref:`default value <default-value>` and have that
 value until they are (re-)assigned.
 
 You can either explicitly assign to return variables and
-then leave the function using ``return;``,
+then leave the function as above,
 or you can provide return values
 (either a single or :ref:`multiple ones<multi-return>`) directly with the ``return``
 statement::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     contract Simple {
         function arithmetic(uint _a, uint _b)
@@ -94,8 +122,8 @@ statement::
         }
     }
 
-This form is equivalent to first assigning values to the
-return variables and then using ``return;`` to leave the function.
+If you use an early ``return`` to leave a function that has return variables,
+you must provide return values together with the return statement.
 
 .. note::
     You cannot return some types from non-internal functions, notably
@@ -146,11 +174,11 @@ The following statements are considered modifying the state:
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.5.0 <0.7.0;
+    pragma solidity >=0.5.0 <0.8.0;
 
     contract C {
         function f(uint a, uint b) public view returns (uint) {
-            return a * (b + 42) + now;
+            return a * (b + 42) + block.timestamp;
         }
     }
 
@@ -192,7 +220,7 @@ In addition to the list of state modifying statements explained above, the follo
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.5.0 <0.7.0;
+    pragma solidity >=0.5.0 <0.8.0;
 
     contract C {
         function f(uint a, uint b) public pure returns (uint) {
@@ -249,7 +277,7 @@ neither a receive Ether nor a payable fallback function is present, the
 contract cannot receive Ether through regular transactions and throws an
 exception.
 
-In the worst case, the fallback function can only rely on 2300 gas being
+In the worst case, the ``receive`` function can only rely on 2300 gas being
 available (for example when ``send`` or ``transfer`` is used), leaving little
 room to perform other operations except basic logging. The following operations
 will consume more gas than the 2300 gas stipend:
@@ -286,7 +314,7 @@ Below you can see an example of a Sink contract that uses function ``receive``.
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity ^0.6.0;
+    pragma solidity >=0.6.0 <0.8.0;
 
     // This contract keeps all Ether sent to it with no way
     // to get it back.
@@ -342,7 +370,7 @@ operations as long as there is enough gas passed on to it.
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.6.2 <0.7.0;
+    pragma solidity >=0.6.2 <0.8.0;
 
     contract Test {
         // This function is called for all messages sent to
@@ -415,7 +443,7 @@ The following example shows overloading of the function
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     contract A {
         function f(uint _in) public pure returns (uint out) {
@@ -434,7 +462,7 @@ externally visible functions differ by their Solidity types but not by their ext
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     // This will not compile
     contract A {
@@ -468,7 +496,7 @@ candidate, resolution fails.
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.16 <0.7.0;
+    pragma solidity >=0.4.16 <0.8.0;
 
     contract A {
         function f(uint8 _in) public pure returns (uint8 out) {

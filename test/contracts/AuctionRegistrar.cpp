@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2015
@@ -41,9 +42,8 @@ namespace solidity::frontend::test
 
 namespace
 {
-
 static char const* registrarCode = R"DELIMITER(
-pragma solidity >=0.4.0 <0.7.0;
+pragma solidity >=0.4.0 <0.8.0;
 
 abstract contract NameRegister {
 	function addr(string memory _name) public virtual view returns (address o_owner);
@@ -71,7 +71,7 @@ abstract contract AuctionSystem {
 
 	function bid(string memory _name, address payable _bidder, uint _value) internal {
 		Auction storage auction = m_auctions[_name];
-		if (auction.endDate > 0 && now > auction.endDate)
+		if (auction.endDate > 0 && block.timestamp > auction.endDate)
 		{
 			emit AuctionEnded(_name, auction.highestBidder);
 			onAuctionEnd(_name);
@@ -85,7 +85,7 @@ abstract contract AuctionSystem {
 			auction.sumOfBids += _value;
 			auction.highestBid = _value;
 			auction.highestBidder = _bidder;
-			auction.endDate = now + c_biddingTime;
+			auction.endDate = block.timestamp + c_biddingTime;
 
 			emit NewBid(_name, _bidder, _value);
 		}
@@ -115,7 +115,7 @@ contract GlobalRegistrar is Registrar, AuctionSystem {
 	uint constant c_renewalInterval = 365 days;
 	uint constant c_freeBytes = 12;
 
-	constructor() public {
+	constructor() {
 		// TODO: Populate with hall-of-fame.
 	}
 
@@ -123,7 +123,7 @@ contract GlobalRegistrar is Registrar, AuctionSystem {
 		Auction storage auction = m_auctions[_name];
 		Record storage record = m_toRecord[_name];
 		address previousOwner = record.owner;
-		record.renewalDate = now + c_renewalInterval;
+		record.renewalDate = block.timestamp + c_renewalInterval;
 		record.owner = auction.highestBidder;
 		emit Changed(_name);
 		if (previousOwner != 0x0000000000000000000000000000000000000000) {
@@ -141,7 +141,7 @@ contract GlobalRegistrar is Registrar, AuctionSystem {
 		bool needAuction = requiresAuction(_name);
 		if (needAuction)
 		{
-			if (now < m_toRecord[_name].renewalDate)
+			if (block.timestamp < m_toRecord[_name].renewalDate)
 				revert();
 			bid(_name, msg.sender, msg.value);
 		} else {
@@ -417,7 +417,7 @@ BOOST_AUTO_TEST_CASE(auction_simple)
 	BOOST_CHECK_EQUAL(registrar.owner(name), 0);
 	// "wait" until auction end
 
-	m_evmHost->tx_context.block_timestamp += m_biddingTime + 10;
+	m_evmcHost->tx_context.block_timestamp += m_biddingTime + 10;
 	// trigger auction again
 	registrar.reserve(name);
 	BOOST_CHECK_EQUAL(registrar.owner(name), m_sender);
@@ -429,7 +429,7 @@ BOOST_AUTO_TEST_CASE(auction_bidding)
 	string name = "x";
 
 	unsigned startTime = 0x776347e2;
-	m_evmHost->tx_context.block_timestamp = startTime;
+	m_evmcHost->tx_context.block_timestamp = startTime;
 
 	RegistrarInterface registrar(*this);
 	// initiate auction
@@ -437,19 +437,19 @@ BOOST_AUTO_TEST_CASE(auction_bidding)
 	registrar.reserve(name);
 	BOOST_CHECK_EQUAL(registrar.owner(name), 0);
 	// overbid self
-	m_evmHost->tx_context.block_timestamp = startTime + m_biddingTime - 10;
+	m_evmcHost->tx_context.block_timestamp = startTime + m_biddingTime - 10;
 	registrar.setNextValue(12);
 	registrar.reserve(name);
 	// another bid by someone else
 	sendEther(account(1), 10 * ether);
 	m_sender = account(1);
-	m_evmHost->tx_context.block_timestamp = startTime + 2 * m_biddingTime - 50;
+	m_evmcHost->tx_context.block_timestamp = startTime + 2 * m_biddingTime - 50;
 	registrar.setNextValue(13);
 	registrar.reserve(name);
 	BOOST_CHECK_EQUAL(registrar.owner(name), 0);
 	// end auction by first bidder (which is not highest) trying to overbid again (too late)
 	m_sender = account(0);
-	m_evmHost->tx_context.block_timestamp = startTime + 4 * m_biddingTime;
+	m_evmcHost->tx_context.block_timestamp = startTime + 4 * m_biddingTime;
 	registrar.setNextValue(20);
 	registrar.reserve(name);
 	BOOST_CHECK_EQUAL(registrar.owner(name), account(1));

@@ -130,7 +130,7 @@ int parseSize(string::const_iterator _begin, string::const_iterator _end)
 {
 	try
 	{
-		unsigned int m = boost::lexical_cast<int>(boost::make_iterator_range(_begin, _end));
+		int m = boost::lexical_cast<int>(boost::make_iterator_range(_begin, _end));
 		return m;
 	}
 	catch(boost::bad_lexical_cast const&)
@@ -150,6 +150,11 @@ static Token keywordByName(string const& _name)
 #undef TOKEN
 	auto it = keywords.find(_name);
 	return it == keywords.end() ? Token::Identifier : it->second;
+}
+
+bool isYulKeyword(string const& _literal)
+{
+	return _literal == "leave" || isYulKeyword(keywordByName(_literal));
 }
 
 tuple<Token, unsigned int, unsigned int> fromIdentifierOrKeyword(string const& _literal)

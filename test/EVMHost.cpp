@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * EVM execution host, i.e. component that implements a simulated Ethereum blockchain
  * for testing purposes.
@@ -38,17 +39,18 @@ using namespace evmc::literals;
 
 evmc::VM& EVMHost::getVM(string const& _path)
 {
-	static evmc::VM theVM;
-	if (!theVM && !_path.empty())
+	static evmc::VM NullVM{nullptr};
+	static map<string, unique_ptr<evmc::VM>> vms;
+	if (vms.count(_path) == 0)
 	{
 		evmc_loader_error_code errorCode = {};
 		auto vm = evmc::VM{evmc_load_and_configure(_path.c_str(), &errorCode)};
 		if (vm && errorCode == EVMC_LOADER_SUCCESS)
 		{
-			if (vm.get_capabilities() & EVMC_CAPABILITY_EVM1)
-				theVM = std::move(vm);
+			if (vm.get_capabilities() & (EVMC_CAPABILITY_EVM1 | EVMC_CAPABILITY_EWASM))
+				vms[_path] = make_unique<evmc::VM>(evmc::VM(move(vm)));
 			else
-				cerr << "VM loaded does not support EVM1" << endl;
+				cerr << "VM loaded neither supports EVM1 nor EWASM" << endl;
 		}
 		else
 		{
@@ -58,7 +60,38 @@ evmc::VM& EVMHost::getVM(string const& _path)
 			cerr << endl;
 		}
 	}
-	return theVM;
+
+	if (vms.count(_path) > 0)
+		return *vms[_path];
+
+	return NullVM;
+}
+
+bool EVMHost::checkVmPaths(vector<boost::filesystem::path> const& _vmPaths)
+{
+	bool evmVmFound = false;
+	bool ewasmVmFound = false;
+	for (auto const& path: _vmPaths)
+	{
+		evmc::VM& vm = EVMHost::getVM(path.string());
+		if (!vm)
+			return false;
+
+		if (vm.has_capability(EVMC_CAPABILITY_EVM1))
+		{
+			if (evmVmFound)
+				throw runtime_error("Multiple evm1 evmc vms defined. Please only define one evm1 evmc vm.");
+			evmVmFound = true;
+		}
+
+		if (vm.has_capability(EVMC_CAPABILITY_EWASM))
+		{
+			if (ewasmVmFound)
+				throw runtime_error("Multiple ewasm evmc vms where defined. Please only define one ewasm evmc vm.");
+			ewasmVmFound = true;
+		}
+	}
+	return evmVmFound;
 }
 
 EVMHost::EVMHost(langutil::EVMVersion _evmVersion, evmc::VM& _vm):
@@ -223,7 +256,7 @@ evmc::result EVMHost::call(evmc_message const& _message) noexcept
 
 	if (message.kind == EVMC_CREATE || message.kind == EVMC_CREATE2)
 	{
-		result.gas_left -= evmasm::GasCosts::createDataGas * result.output_size;
+		result.gas_left -= static_cast<int64_t>(evmasm::GasCosts::createDataGas * result.output_size);
 		if (result.gas_left < 0)
 		{
 			result.gas_left = 0;

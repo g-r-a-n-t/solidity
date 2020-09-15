@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 
 #include <libsolutil/CommonIO.h>
 #include <libsolutil/AnsiColorized.h>
@@ -21,17 +22,13 @@
 #include <memory>
 #include <test/Common.h>
 #include <test/tools/IsolTestOptions.h>
-#include <test/libsolidity/AnalysisFramework.h>
 #include <test/InteractiveTests.h>
 #include <test/EVMHost.h>
 
-#include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
-#include <boost/program_options.hpp>
 
 #include <cstdlib>
-#include <fstream>
 #include <iostream>
 #include <queue>
 #include <regex>
@@ -164,6 +161,7 @@ TestTool::Result TestTool::process()
 			m_test = m_testCaseCreator(TestCase::Config{
 				m_path.string(),
 				m_options.evmVersion(),
+				m_options.vmPaths,
 				m_options.enforceViaYul
 			});
 			if (m_test->shouldRun())
@@ -427,14 +425,19 @@ int main(int argc, char const *argv[])
 
 	auto& options = dynamic_cast<solidity::test::IsolTestOptions const&>(solidity::test::CommonOptions::get());
 
-	bool disableSemantics = !solidity::test::EVMHost::getVM(options.evmonePath.string());
-	if (disableSemantics)
+	bool disableSemantics = true;
+	try
 	{
-		cout << "Unable to find " << solidity::test::evmoneFilename << ". Please provide the path using --evmonepath <path>." << endl;
-		cout << "You can download it at" << endl;
-		cout << solidity::test::evmoneDownloadLink << endl;
-		cout << endl << "--- SKIPPING ALL SEMANTICS TESTS ---" << endl << endl;
+		disableSemantics = !solidity::test::EVMHost::checkVmPaths(options.vmPaths);
 	}
+	catch (std::runtime_error const& _exception)
+	{
+		cerr << "Error: " << _exception.what() << endl;
+		return 1;
+	}
+
+	if (disableSemantics)
+		cout << endl << "--- SKIPPING ALL SEMANTICS TESTS ---" << endl << endl;
 
 	TestStats global_stats{0, 0};
 	cout << "Running tests..." << endl << endl;
@@ -475,7 +478,7 @@ int main(int argc, char const *argv[])
 	cout << "." << endl;
 
 	if (disableSemantics)
-		cout << "\nNOTE: Skipped semantics tests because " << solidity::test::evmoneFilename << " could not be found.\n" << endl;
+		cout << "\nNOTE: Skipped semantics tests because no evmc vm could be found.\n" << endl;
 
 	return global_stats ? 0 : 1;
 }

@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 /**
  * @author Christian <c@ethdev.com>
  * @date 2015
@@ -264,7 +265,7 @@ BOOST_AUTO_TEST_CASE(helper_bool_result)
 
 	BoolResult r7{true};
 	// Attention: this will implicitly convert to bool.
-	BoolResult r8{"true"};
+	BoolResult r8("true"); // We cannot use {} initializer here because this does not allow narrowing conversion (at least MSVC breaks)
 	r7.merge(r8, logical_and<bool>());
 	BOOST_REQUIRE_EQUAL(r7.get(), true);
 	BOOST_REQUIRE_EQUAL(r7.message(), "");

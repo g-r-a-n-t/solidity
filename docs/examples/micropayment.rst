@@ -61,12 +61,11 @@ For a contract that fulfils payments, the signed message must include:
     2. The amount to be transferred.
     3. Protection against replay attacks.
 
-A replay attack is when a signed message is reused to claim authorization for
-a second action.
-To avoid replay attacks we use the same as in Ethereum transactions
-themselves, a so-called nonce, which is the number of transactions sent by an
-account.
-The smart contract checks if a nonce is used multiple times.
+A replay attack is when a signed message is reused to claim
+authorization for a second action. To avoid replay attacks
+we use the same technique as in Ethereum transactions themselves,
+a so-called nonce, which is the number of transactions sent by
+an account. The smart contract checks if a nonce is used multiple times.
 
 Another type of replay attack can occur when the owner
 deploys a ``ReceiverPays`` smart contract, makes some
@@ -114,7 +113,7 @@ In general, ECDSA signatures consist of two parameters,
 parameter called ``v``, that you can use to verify which
 account's private key was used to sign the message, and
 the transaction's sender. Solidity provides a built-in
-function `ecrecover <mathematical-and-cryptographic-functions>`_ that
+function :ref:`ecrecover <mathematical-and-cryptographic-functions>` that
 accepts a message along with the ``r``, ``s`` and ``v`` parameters
 and returns the address that was used to sign the message.
 
@@ -127,7 +126,7 @@ apart. You can do this on the client-side, but doing it inside
 the smart contract means you only need to send one signature
 parameter rather than three. Splitting apart a byte array into
 its constituent parts is a mess, so we use
-`inline assembly <assembly>`_ to do the job in the ``splitSignature``
+:doc:`inline assembly <assembly>` to do the job in the ``splitSignature``
 function (the third function in the full contract at the end of this section).
 
 Computing the Message Hash
@@ -143,14 +142,14 @@ The full contract
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.4.24 <0.7.0;
+    pragma solidity >0.6.99 <0.8.0;
 
     contract ReceiverPays {
         address owner = msg.sender;
 
         mapping(uint256 => bool) usedNonces;
 
-        constructor() public payable {}
+        constructor() payable {}
 
         function claimPayment(uint256 amount, uint256 nonce, bytes memory signature) public {
             require(!usedNonces[nonce]);
@@ -340,7 +339,7 @@ The full contract
 ::
 
     // SPDX-License-Identifier: GPL-3.0
-    pragma solidity >=0.5.0 <0.7.0;
+    pragma solidity >0.6.99 <0.8.0;
 
     contract SimplePaymentChannel {
         address payable public sender;      // The account sending payments.
@@ -348,12 +347,11 @@ The full contract
         uint256 public expiration;  // Timeout in case the recipient never closes.
 
         constructor (address payable _recipient, uint256 duration)
-            public
             payable
         {
             sender = msg.sender;
             recipient = _recipient;
-            expiration = now + duration;
+            expiration = block.timestamp + duration;
         }
 
         /// the recipient can close the channel at any time by presenting a
@@ -378,7 +376,7 @@ The full contract
         /// if the timeout is reached without the recipient closing the channel,
         /// then the Ether is released back to the sender.
         function claimTimeout() public {
-            require(now >= expiration);
+            require(block.timestamp >= expiration);
             selfdestruct(sender);
         }
 

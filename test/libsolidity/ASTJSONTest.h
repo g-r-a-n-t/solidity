@@ -14,6 +14,7 @@
 	You should have received a copy of the GNU General Public License
 	along with solidity.  If not, see <http://www.gnu.org/licenses/>.
 */
+// SPDX-License-Identifier: GPL-3.0
 
 #pragma once
 
@@ -25,8 +26,14 @@
 #include <vector>
 #include <utility>
 
+namespace solidity::frontend
+{
+class CompilerStack;
+}
+
 namespace solidity::frontend::test
 {
+
 
 class ASTJSONTest: public TestCase
 {
@@ -40,8 +47,24 @@ public:
 	void printSource(std::ostream& _stream, std::string const& _linePrefix = "", bool const _formatted = false) const override;
 	void printUpdatedExpectations(std::ostream& _stream, std::string const& _linePrefix) const override;
 private:
+	bool runTest(
+		std::string& _expectation,
+		std::string& _result,
+		std::map<std::string, unsigned> const& _sourceIndicies,
+		CompilerStack& _compiler,
+		bool _legacy,
+		std::string const& _variation,
+		std::ostream& _stream,
+		std::string const& _linePrefix = "",
+		bool const _formatted = false
+	);
+	void updateExpectation(
+		std::string const& _filename,
+		std::string const& _expectation,
+		std::string const& _variation
+	) const;
+
 	std::vector<std::pair<std::string, std::string>> m_sources;
-	std::string m_expectation;
 	std::string m_expectationLegacy;
 	std::string m_astFilename;
 	std::string m_legacyAstFilename;
